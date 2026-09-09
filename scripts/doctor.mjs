@@ -38,6 +38,7 @@ export async function main(args) {
       'ADB 枚举可能启动共用 ADB Server；本工具不会关闭它，也不会创建转发或操作 APP。',
       '退出码：0 前置条件满足；1 存在阻塞；2 参数或工具内部错误。',
       '注意：预检成功不代表投屏、输入、DevTools 或目标 APP 已通过验收。',
+      '下一步：node scripts/webview.mjs --help 查看页面发现与 DevTools 连接（会创建临时转发）。',
     ].join('\n'));
     return 0;
   }
