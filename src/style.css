@@ -1,0 +1,91 @@
+:root {
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  color: #dce5df;
+  background: #101512;
+  font-synthesis: none;
+  --bg: #101512;
+  --panel: #141a16;
+  --line: #29322c;
+  --muted: #839187;
+  --accent: #a0e6bb;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, input, select { font: inherit; }
+button { cursor: pointer; color: inherit; }
+button:disabled { cursor: wait; opacity: .6; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+button { transition: background .16s ease, border-color .16s ease, color .16s ease; }
+.mono, .eyebrow { font-family: "Cascadia Code", "Consolas", monospace; }
+.workbench { display: flex; flex-direction: column; height: 100vh; min-height: 600px; overflow: hidden; }
+.topbar { height: 66px; flex-shrink: 0; display: flex; align-items: center; padding: 0 24px; gap: 32px; border-bottom: 1px solid var(--line); background: #141a16; }
+.brand { display: flex; align-items: center; gap: 12px; font-size: 17px; font-weight: 650; letter-spacing: -.6px; }
+.brand-mark { font: 800 27px "Cascadia Code", monospace; color: var(--accent); letter-spacing: -5px; width: 33px; }
+.brand-mark span { color: #64786b; }
+.brand-sub { font-size: 13px; font-weight: 400; margin-left: 3px; color: #acb8af; letter-spacing: 1px; }
+.topbar-context { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 12px; border-left: 1px solid #354038; padding-left: 25px; }
+.connection-dot { display: inline-block; flex-shrink: 0; width: 6px; height: 6px; background: #627167; border-radius: 50%; }
+.connection-dot.online { background: var(--accent); box-shadow: 0 0 0 3px #a0e6bb0b; }
+.quiet-button { background: transparent; border: 1px solid #354138; border-radius: 5px; padding: 7px 12px; font-size: 11px; }
+.quiet-button:hover { background: #253128; border-color: #6e8a78; }
+.settings-button { margin-left: auto; }
+.workspace { display: grid; grid-template-columns: 236px 330px minmax(380px,1fr); flex: 1; min-height: 0; }
+.sidebar { border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 0 14px; background: #141a16; overflow: auto; }
+.section-title { display: flex; align-items: center; height: 64px; gap: 8px; padding: 0 6px; }
+h1 { font-size: 12px; margin: 0; font-weight: 600; letter-spacing: 2px; }
+.count { color: var(--muted); font-size: 11px; margin-left: 2px; }
+.icon-button { background: transparent; border: 0; font-size: 23px; padding: 3px 6px; color: var(--muted); line-height: 1; }
+.icon-button:hover { color: var(--accent); }
+.refresh-button { margin-left: auto; }
+.device-list { display: flex; flex-direction: column; gap: 5px; }
+.device-item { display: flex; align-items: center; gap: 12px; padding: 14px 12px; width: 100%; border: 1px solid transparent; border-radius: 5px; background: transparent; text-align: left; }
+.device-item:hover { background: #1c2720; }
+.device-item.selected { background: #203027; border-color: #354d3d; }
+.device-copy { display: flex; flex-direction: column; min-width: 0; gap: 6px; flex: 1; }
+.device-copy strong { font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.device-copy > span { font-size: 10px; color: var(--muted); }
+.device-glyph { display: block; width: 14px; height: 23px; border: 1.5px solid #88a591; border-radius: 3px; position: relative; }
+.device-glyph:after { content: ""; position: absolute; width: 4px; height: 1px; background: #88a591; bottom: 3px; left: 3.5px; }
+.sidebar-note { margin-top: auto; padding: 25px 7px; }
+.eyebrow { font-size: 10px; letter-spacing: 2px; color: #738d7c; }
+.sidebar-note p { font-size: 10px; line-height: 1.9; color: #6f8175; margin: 10px 0 0; }
+.pane-heading { height: 53px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; padding: 0 19px; font-size: 11px; flex-shrink: 0; gap: 15px; }
+.subtle { color: #74837a; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.screen-pane { display: flex; flex-direction: column; border-right: 1px solid var(--line); background: #111713; min-height: 0; }
+.phone-stage { display: flex; flex: 1; min-height: 0; justify-content: center; align-items: center; padding: 24px; }
+.phone-outline { width: min(242px,100%); max-height: 100%; aspect-ratio: 9/19; border: 1px solid #3a473d; border-radius: 29px; background: #151d18; position: relative; display: flex; flex-direction: column; justify-content: center; box-shadow: 0 14px 40px #00000024; }
+.phone-camera { width: 7px; height: 7px; border-radius: 50%; background: #0a100c; border: 1px solid #2a382f; position: absolute; top: 12px; left: calc(50% - 3px); }
+.phone-bottom { position: absolute; bottom: 10px; left: 35%; width: 30%; height: 3px; border-radius: 4px; background: #3b4b40; }
+.phone-placeholder { text-align: center; padding: 20px 15px; display: flex; flex-direction: column; align-items: center; }
+.phone-placeholder svg { width: 44px; stroke: #607969; stroke-width: 1.2; fill: none; margin-bottom: 22px; }
+.phone-placeholder strong { font-size: 12px; font-weight: 400; color: #8ca392; }
+.phone-placeholder p { font-size: 10px; color: #627b6b; line-height: 1.8; margin: 10px 0 0; }
+.screen-caption { display: flex; gap: 8px; align-items: center; justify-content: center; padding: 0 15px 24px; color: #718879; font-size: 10px; }
+.inspector-pane { display: flex; flex-direction: column; min-height: 0; background: #101512; }
+.inspector-empty { margin: auto; text-align: center; padding: 30px; animation: enter .3s ease both; }
+.inspect-symbol { display: flex; align-items: center; justify-content: center; margin: 0 auto 30px; width: 80px; height: 80px; border: 1px solid #35453a; border-radius: 20px; background: #19231c; transform: rotate(-4deg); }
+.inspect-symbol svg { width: 46px; stroke: #90c9a4; fill: none; stroke-width: 1.5; transform: rotate(4deg); }
+.inspector-empty > .eyebrow { font-size: 9px; color: #698a74; }
+h2 { font-size: 24px; font-weight: 500; letter-spacing: -.5px; margin: 14px 0; }
+.inspector-empty p { font-size: 11px; line-height: 2.1; color: #7e9285; margin: 0 0 30px; }
+.primary-button { background: var(--accent); color: #153220; border: 1px solid transparent; border-radius: 5px; padding: 11px 16px; font-size: 11px; font-weight: 600; display: inline-flex; gap: 30px; align-items: center; }
+.primary-button:hover { background: #bff2d3; }
+.primary-button span { font-size: 15px; transition: transform .16s; }
+.primary-button:hover span { transform: translateX(3px); }
+.setup-steps { display: flex; align-items: center; justify-content: center; gap: 11px; margin-top: 45px; font-size: 9px; color: #6c8274; }
+.setup-steps b { font: 9px "Cascadia Code", monospace; color: #53685b; margin-right: 5px; }
+.setup-steps i { width: 17px; height: 1px; background: #344139; }
+.statusbar { display: flex; align-items: center; gap: 18px; height: 32px; padding: 0 20px; border-top: 1px solid var(--line); font-size: 9px; background: #151d18; color: #809386; flex-shrink: 0; }
+.statusbar > span:first-child { display: flex; gap: 8px; align-items: center; }
+.status-message { margin-right: auto; }
+.version { border-left: 1px solid #344138; padding-left: 15px; color: #5f7868; }
+.inline-error { background: #332d1d; color: #ddc58e; border-left: 2px solid #a78b51; font-size: 11px; line-height: 1.8; padding: 12px; margin-bottom: 12px; }
+.device-empty { text-align: center; padding: 40px 12px; color: #769080; }
+.device-empty p { font-size: 12px; }
+.device-empty > span:last-child { font-size: 10px; line-height: 1.9; }
+.small-device { display: block; margin: auto; width: 23px; height: 37px; border: 1px solid #516b5b; border-radius: 5px; }
+.spinning { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes enter { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+@media (max-width: 1150px) { .workspace { grid-template-columns: 210px 280px minmax(340px,1fr); } .topbar { padding: 0 20px; } h2 { font-size: 22px; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
