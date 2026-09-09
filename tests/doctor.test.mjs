@@ -4,7 +4,8 @@ import { promisify } from 'node:util';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { parseOptions } from '../scripts/doctor.mjs';
-import { countWebViewSockets, diagnose, parseDevices, parseWebViewVersion, runAdb } from '../scripts/lib/doctor.mjs';
+import { countWebViewSockets, diagnose, parseDevices, parseWebViewSockets,
+  parseWebViewVersion, runAdb, selectUsbDevice } from '../scripts/lib/doctor.mjs';
 
 const ok = (stdout) => ({ ok: true, stdout });
 const baseline = { platform: 'win32', arch: 'x64', nodeVersion: '22.18.0' };
@@ -53,6 +54,21 @@ test('调试 socket 去重并排除其他应用 socket 与无效后缀', () => {
   assert.equal(countWebViewSockets('@webview_devtools_remote_1\n@webview_devtools_remote_1\n'
     + '@webview_devtools_remote_2\n@webview_devtools_remote\n@chrome_devtools_remote\n'
     + '@webview_devtools_remote_2_other\n'), 3);
+});
+
+test('socket 解析只接受完整字段，返回去重的 localabstract 名称', () => {
+  assert.deepEqual(parseWebViewSockets('@webview_devtools_remote_1\n'
+    + 'prefix@webview_devtools_remote_2\n@webview_devtools_remote_1\n'
+    + '@webview_devtools_remote\n@webview_devtools_remote_2_suffix\n'),
+  ['webview_devtools_remote_1', 'webview_devtools_remote']);
+});
+
+test('共用 USB 选择器返回指定设备，拒绝多设备自动选择', async () => {
+  const selected = await selectUsbDevice(fakeAdb());
+  assert.deepEqual(selected, { ok: true, device: { serial: 'fixture-device', state: 'device' } });
+  const fake = fakeAdb({ 'devices -l': ok('List of devices attached\none device\ntwo device\n') });
+  assert.equal((await selectUsbDevice(fake)).code, 'device_selection_required');
+  assert.equal(fake.calls.length, 1);
 });
 
 test('USB 真机前置条件满足时成功，报告不包含设备标识或原始输出', async () => {
