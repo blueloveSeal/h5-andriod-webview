@@ -34,9 +34,52 @@ export function parseWebViewVersion(output) {
   return output.match(/Current WebView package \(name, version\):\s*\([a-zA-Z0-9_.]+,\s*([0-9]+(?:\.[0-9]+){1,3})\)/)?.[1] ?? null;
 }
 
+export function parseWebViewSockets(output) {
+  return [...new Set([...output.matchAll(/(?:^|\s)@(webview_devtools_remote(?:_[0-9]+)?)(?=\s|$)/g)]
+    .map((match) => match[1]))];
+}
+
 export function countWebViewSockets(output) {
-  return new Set([...output.matchAll(/@webview_devtools_remote(?:_[0-9]+)?(?=\s|$)/g)]
-    .map((match) => match[0])).size;
+  return parseWebViewSockets(output).length;
+}
+
+// 预检与页面发现共用同一套设备选择规则，不回退到另一台设备。
+export async function selectUsbDevice({ adb = 'adb', serial, executeAdb = runAdb } = {}) {
+  const fail = (code, message, details) => ({
+    ok: false, code, message, ...(details ? { details } : {}),
+  });
+  const response = await executeAdb(adb, ['devices', '-l']);
+  const devices = response.ok ? parseDevices(response.stdout) : null;
+  if (!devices) return fail('device_list_failed', '无法读取设备列表，请检查 ADB 服务。');
+  const selected = serial ? devices.filter((device) => device.serial === serial) : devices;
+  if (selected.length !== 1) {
+    const code = selected.length > 1 ? 'device_selection_required'
+      : serial ? 'selected_device_missing' : 'no_device';
+    return fail(code, selected.length > 1
+      ? '发现多台设备，请用 --serial 明确选择；不会擅自连接其中一台。'
+      : '未找到所选设备，请通过 USB 连接手机并开启 USB 调试。', { count: devices.length });
+  }
+  const device = selected[0];
+  if (device.state !== 'device') {
+    const messages = {
+      unauthorized: '等待授权，请解锁手机并确认 USB 调试授权。',
+      offline: '设备离线，请检查 USB 连接。',
+      no_permissions: 'ADB 没有设备访问权限，请检查驱动或 USB 权限。',
+    };
+    const knownState = Object.hasOwn(messages, device.state);
+    return fail(knownState ? `device_${device.state}` : 'device_not_ready',
+      knownState ? messages[device.state] : '设备不在可调试状态。');
+  }
+  const transport = await executeAdb(adb, ['-s', device.serial, 'get-devpath']);
+  let usbConfirmed = transport.ok && transport.stdout.trim().startsWith('usb:');
+  if (!usbConfirmed) {
+    // Windows/libusb 可能不提供路径；多 USB 设备时 -d 失败，不能据此猜测。
+    const usb = await executeAdb(adb, ['-d', 'get-serialno']);
+    usbConfirmed = usb.ok && usb.stdout.trim() === device.serial;
+  }
+  if (!usbConfirmed) return fail('usb_transport_unverified',
+    '未确认所选设备的 USB 传输。若连接了多台 USB 设备且 ADB 不提供设备路径，请仅保留待验收设备。');
+  return { ok: true, device };
 }
 
 export async function diagnose({
@@ -74,47 +117,12 @@ export async function diagnose({
   }
   add('adb', 'pass', 'adb_ready', 'ADB 可用。', { version: adbVersion });
 
-  const response = await executeAdb(adb, ['devices', '-l']);
-  const devices = response.ok ? parseDevices(response.stdout) : null;
-  if (!devices) {
-    add('device', 'blocked', 'device_list_failed', '无法读取设备列表，请检查 ADB 服务。');
+  const selection = await selectUsbDevice({ adb, serial, executeAdb });
+  if (!selection.ok) {
+    add('device', 'blocked', selection.code, selection.message, selection.details);
     return finish();
   }
-  const selected = serial ? devices.filter((device) => device.serial === serial) : devices;
-  if (selected.length !== 1) {
-    const code = selected.length > 1 ? 'device_selection_required'
-      : serial ? 'selected_device_missing' : 'no_device';
-    add('device', 'blocked', code, selected.length > 1
-      ? '发现多台设备，请用 --serial 明确选择；不会擅自连接其中一台。'
-      : '未找到所选设备，请通过 USB 连接手机并开启 USB 调试。', { count: devices.length });
-    return finish();
-  }
-  const device = selected[0];
-  if (device.state !== 'device') {
-    const messages = {
-      unauthorized: '等待授权，请解锁手机并确认 USB 调试授权。',
-      offline: '设备离线，请检查 USB 连接。',
-      no_permissions: 'ADB 没有设备访问权限，请检查驱动或 USB 权限。',
-    };
-    const knownState = Object.hasOwn(messages, device.state);
-    add('device', 'blocked', knownState ? `device_${device.state}` : 'device_not_ready',
-      knownState ? messages[device.state] : '设备不在可调试状态。');
-    return finish();
-  }
-  const prefix = ['-s', device.serial];
-  const transport = await executeAdb(adb, [...prefix, 'get-devpath']);
-  let usbConfirmed = transport.ok && transport.stdout.trim().startsWith('usb:');
-  if (!usbConfirmed) {
-    // Windows/libusb 可能不提供设备路径，使用 ADB 的 USB 专用选择器交叉确认。
-    // 多 USB 设备时 -d 会失败；不能因此退回到任意设备或猜测连接类型。
-    const usb = await executeAdb(adb, ['-d', 'get-serialno']);
-    usbConfirmed = usb.ok && usb.stdout.trim() === device.serial;
-  }
-  if (!usbConfirmed) {
-    add('device', 'blocked', 'usb_transport_unverified',
-      '未确认所选设备的 USB 传输。若连接了多台 USB 设备且 ADB 不提供设备路径，请仅保留待验收设备。');
-    return finish();
-  }
+  const prefix = ['-s', selection.device.serial];
   add('device', 'pass', 'usb_device_ready', '已确认一台已授权的 USB 设备。');
 
   const commands = [
