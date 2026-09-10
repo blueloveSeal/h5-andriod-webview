@@ -68,6 +68,18 @@ export function pageGeometry(description, screen) {
   return { visible, candidate, width, height };
 }
 
+export function frontendEntry(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.hostname === 'chrome-devtools-frontend.appspot.com' &&
+      !url.port && !url.username && !url.password &&
+      /^\/serve_rev\/@[0-9a-f]{40}\/inspector\.html$/.test(url.pathname)
+      ? url.origin + url.pathname : null;
+  } catch {
+    return null;
+  }
+}
+
 const text = (value, limit = 4096) => typeof value === 'string' ? value.slice(0, limit) : '';
 
 export class WebViewDiscovery {
@@ -106,13 +118,19 @@ export class WebViewDiscovery {
   }
 
   async scanNow(serial) {
-    this.targets.clear();
-    if (this.closed) return { pages: [], error: '工作台正在关闭。' };
+    const nextTargets = new Map();
+    if (this.closed) {
+      this.targets = nextTargets;
+      return { pages: [], error: '工作台正在关闭。' };
+    }
     const adb = this.adb();
     for (const [key, item] of this.forwards) {
       if (item.serial !== serial || item.adb !== adb) await this.removeForward(key);
     }
-    if (!serial) return { pages: [], error: null };
+    if (!serial) {
+      this.targets = nextTargets;
+      return { pages: [], error: null };
+    }
     let sockets;
     let screen = null;
     try {
@@ -122,6 +140,7 @@ export class WebViewDiscovery {
       }
     } catch {
       for (const key of this.forwards.keys()) await this.removeForward(key);
+      this.targets = nextTargets;
       return { pages: [], error: '无法读取 WebView，请检查手机授权和 USB 连接。' };
     }
     for (const [key, item] of this.forwards) {
@@ -154,14 +173,25 @@ export class WebViewDiscovery {
             browser: text(version?.Browser, 128), ...pageGeometry(target.description, screen),
           };
           pages.push(page);
-          this.targets.set(id, { ...page, serial, socket, endpoint: 'ws://127.0.0.1:' + forward.port + endpoint.pathname });
+          nextTargets.set(id, {
+            ...page, serial, socket,
+            endpoint: 'ws://127.0.0.1:' + forward.port + endpoint.pathname,
+            frontend: frontendEntry(target.devtoolsFrontendUrl),
+          });
         }
       } catch {
         failures++;
-        await this.removeForward(key);
+        // 调试连接占用期间，HTTP 列表可能短暂不可读；保留上一轮目标和端口，避免切断已打开的 DevTools。
+        for (const [id, previous] of this.targets) {
+          if (previous.serial !== serial || previous.socket !== socket) continue;
+          const { endpoint, frontend, serial: _serial, socket: _socket, ...page } = previous;
+          pages.push(page);
+          nextTargets.set(id, previous);
+        }
       }
     }
     pages.sort((a, b) => Number(b.candidate) - Number(a.candidate) || a.packageName.localeCompare(b.packageName));
+    this.targets = nextTargets;
     return { pages, error: failures ? '部分 WebView 暂时无法读取，将自动重试。' : null };
   }
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { Device } from '../electron/services/devices.mjs';
 import type { WebViewPage } from '../electron/services/webviews.mjs';
 
@@ -13,9 +13,14 @@ const selectedPageId = ref('');
 const pageError = ref('');
 const pagesLoading = ref(false);
 const selectedPage = computed(() => pages.value.find((page) => page.id === selectedPageId.value));
+const inspectorHost = ref<HTMLElement>();
+const inspectorOpen = ref(false);
+const inspectorLoading = ref(false);
+const inspectorError = ref('');
 const selected = computed(() => devices.value.find((device) => device.serial === selectedId.value));
 const connected = computed(() => devices.value.filter((device) => device.state === 'device').length);
 let timer: ReturnType<typeof setInterval> | undefined;
+let inspectorObserver: ResizeObserver | undefined;
 
 function status(state: string) {
   if (state === 'device') return '已连接';
@@ -71,11 +76,55 @@ async function refreshPages() {
   }
 }
 
-watch(() => [selectedId.value, selected.value?.state], () => {
+function inspectorRect() {
+  const rect = inspectorHost.value?.getBoundingClientRect();
+  return rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
+}
+
+function syncInspectorBounds() {
+  const rect = inspectorRect();
+  if (inspectorOpen.value && rect) void window.workbench?.inspector.bounds(rect);
+}
+
+async function closeInspector() {
+  inspectorOpen.value = false;
+  inspectorLoading.value = false;
+  await window.workbench?.inspector.close();
+}
+
+async function openInspector() {
+  if (!selectedPage.value || inspectorLoading.value || !window.workbench) return;
+  inspectorLoading.value = true;
+  inspectorError.value = '';
+  await nextTick();
+  const rect = inspectorRect();
+  if (!rect) {
+    inspectorError.value = '无法确定调试区域，请调整窗口后重试。';
+    inspectorLoading.value = false;
+    return;
+  }
+  try {
+    const result = await window.workbench.inspector.open(selectedPage.value.id, rect);
+    inspectorOpen.value = result.ok;
+    inspectorError.value = result.error || '';
+  } catch {
+    inspectorError.value = 'DevTools 启动失败，请刷新页面后重试。';
+  } finally {
+    inspectorLoading.value = false;
+  }
+}
+
+watch([selectedId, () => selected.value?.state], () => {
+  void closeInspector();
   pages.value = [];
   selectedPageId.value = '';
   pageError.value = '';
   void refreshPages();
+});
+
+watch(selectedPageId, (value, previous) => {
+  if (value !== previous && inspectorOpen.value) void closeInspector();
+  inspectorError.value = '';
 });
 
 async function chooseAdb() {
@@ -85,8 +134,14 @@ async function chooseAdb() {
 onMounted(() => {
   void refresh();
   timer = setInterval(() => void refresh(), 3000);
+  inspectorObserver = new ResizeObserver(syncInspectorBounds);
+  if (inspectorHost.value) inspectorObserver.observe(inspectorHost.value);
 });
-onUnmounted(() => clearInterval(timer));
+onUnmounted(() => {
+  clearInterval(timer);
+  inspectorObserver?.disconnect();
+  void closeInspector();
+});
 </script>
 
 <template>
@@ -134,15 +189,23 @@ onUnmounted(() => clearInterval(timer));
       </section>
 
       <section class="inspector-pane">
-        <div class="pane-heading"><span>WebView 调试</span><span class="mono subtle">DEVTOOLS</span></div>
-        <div class="inspector-empty">
+        <div class="pane-heading">
+          <span>WebView 调试</span>
+          <button v-if="inspectorOpen" class="quiet-button inspector-close" @click="closeInspector">关闭面板</button>
+          <span v-else class="mono subtle">DEVTOOLS</span>
+        </div>
+        <div ref="inspectorHost" class="inspector-surface">
+        <div v-if="!inspectorOpen" class="inspector-empty">
           <span class="inspect-symbol"><svg viewBox="0 0 64 64" aria-hidden="true"><path d="M12 18h40v28H12zM12 25h40"/><path d="m25 31-6 5 6 5m14-10 6 5-6 5m-5-11-4 13"/></svg></span>
           <span class="eyebrow">ANDROID WEBVIEW</span>
           <h2>{{ selectedPage ? selectedPage.title : '从设备开始调试' }}</h2>
-          <p v-if="selectedPage" class="selected-page-details">{{ selectedPage.packageName }}<br />{{ selectedPage.url }}<br />{{ selectedPage.browser }} · DevTools 连接将在下一功能点接入。</p>
+          <p v-if="selectedPage" class="selected-page-details">{{ selectedPage.packageName }}<br />{{ selectedPage.url }}<br />{{ selectedPage.browser }}</p>
           <p v-else>连接手机并打开 APP 中的 WebView 页面。<br />可调试页面会出现在左侧列表中。</p>
-          <button class="primary-button" :disabled="loading" @click="refresh">{{ loading ? '正在检查设备…' : '检查设备连接' }} <span>→</span></button>
+          <div v-if="inspectorError" class="inspector-error" role="alert">{{ inspectorError }}</div>
+          <button v-if="selectedPage" class="primary-button open-inspector" :disabled="inspectorLoading" @click="openInspector">{{ inspectorLoading ? '正在连接…' : '打开 DevTools' }} <span>→</span></button>
+          <button v-else class="primary-button" :disabled="loading" @click="refresh">{{ loading ? '正在检查设备…' : '检查设备连接' }} <span>→</span></button>
           <div class="setup-steps"><span><b>01</b>连接 USB</span><i></i><span><b>02</b>允许调试</span><i></i><span><b>03</b>打开 APP</span></div>
+        </div>
         </div>
       </section>
     </main>
