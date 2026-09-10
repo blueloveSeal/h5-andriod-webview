@@ -1,0 +1,103 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import { WebViewDiscovery, pageGeometry, socketNames, screenSize, readJson } from '../electron/services/webviews.mjs';
+
+test('调试 socket 去重并拒绝非 WebView 名称', () => {
+  assert.deepEqual(socketNames('@webview_devtools_remote_12\n@webview_devtools_remote_12\n@chrome_devtools_remote\n@webview_devtools_remote_BAD'), ['webview_devtools_remote_12']);
+});
+
+test('预加载页面即使 visible 为真，也不能作为屏幕内候选', () => {
+  const screen = screenSize('Physical size: 1440x3200\nOverride size: 1280x2778');
+  assert.deepEqual(screen, { width: 1280, height: 2778 });
+  const description = (x) => JSON.stringify({ visible: true, attached: true, width: 1280, height: 2474, screenX: x, screenY: 152 });
+  assert.equal(pageGeometry(description(0), screen).candidate, true);
+  assert.equal(pageGeometry(description(1280), screen).candidate, false);
+  assert.equal(pageGeometry(description(-1280), screen).candidate, false);
+  assert.equal(pageGeometry('invalid', screen).candidate, false);
+  assert.equal(pageGeometry('null', screen).candidate, false);
+  assert.equal(pageGeometry(description(0), null).candidate, false);
+});
+
+function fixture() {
+  const calls = [];
+  let sockets = '@webview_devtools_remote_12';
+  let fail = false;
+  let forward = false;
+  const discovery = new WebViewDiscovery({
+    run: async (file, args) => {
+      calls.push(args);
+      if (args.includes('/proc/net/unix')) {
+        if (fail) throw new Error('offline');
+        return sockets;
+      }
+      if (args.includes('wm')) return 'Physical size: 1280x2778';
+      if (args.includes('tcp:0')) { forward = true; return '43210'; }
+      if (args.includes('--list')) return forward ? 'phone-a tcp:43210 localabstract:webview_devtools_remote_12\nother tcp:9999 localabstract:other' : '';
+      if (args.includes('--remove')) { forward = false; return ''; }
+      throw new Error('Unexpected command');
+    },
+    json: async (_port, route) => route.endsWith('version') ? { 'Android-Package': 'org.example.app', Browser: 'Chrome/143' } : [
+      { id: 'page-1', type: 'page', title: 'Example', url: 'https://example.com', webSocketDebuggerUrl: 'ws://untrusted.example/devtools/page/page-1', description: '{}' },
+      { id: 'bad', type: 'page', webSocketDebuggerUrl: 'wss://example.com/anything' },
+    ],
+  });
+  return { discovery, calls, disappear: () => { sockets = ''; }, fail: () => { fail = true; } };
+}
+
+test('只使用自建 localhost 转发，保留稳定目标标识并复用端口', async () => {
+  const { discovery, calls } = fixture();
+  const first = await discovery.scan('phone-a');
+  assert.equal(first.pages.length, 1);
+  assert.equal(first.pages[0].packageName, 'org.example.app');
+  assert.equal(discovery.target(first.pages[0].id).endpoint, 'ws://127.0.0.1:43210/devtools/page/page-1');
+  const second = await discovery.scan('phone-a');
+  assert.equal(second.pages[0].id, first.pages[0].id);
+  assert.equal(calls.filter((args) => args.includes('tcp:0')).length, 1);
+  await discovery.close();
+  assert.deepEqual(calls.at(-1), ['-s', 'phone-a', 'forward', '--remove', 'tcp:43210']);
+});
+
+test('页面进程消失后清理目标和所属转发', async () => {
+  const { discovery, calls, disappear } = fixture();
+  const result = await discovery.scan('phone-a');
+  disappear();
+  assert.deepEqual(await discovery.scan('phone-a'), { pages: [], error: null });
+  assert.equal(discovery.target(result.pages[0].id), undefined);
+  assert.equal(calls.filter((args) => args.includes('--remove')).length, 1);
+  await discovery.close();
+});
+
+test('断开设备返回可处理错误并清理转发', async () => {
+  const { discovery, calls, fail } = fixture();
+  await discovery.scan('phone-a');
+  fail();
+  assert.ok((await discovery.scan('phone-a')).error);
+  assert.equal(calls.filter((args) => args.includes('--remove')).length, 1);
+  await discovery.close();
+});
+
+test('并发扫描串行化，切换为空设备后不遗留旧目标', async () => {
+  const { discovery, calls } = fixture();
+  await Promise.all([discovery.scan('phone-a'), discovery.scan('')]);
+  assert.equal(discovery.targets.size, 0);
+  assert.equal(calls.filter((args) => args.includes('--remove')).length, 1);
+  await discovery.close();
+  assert.ok((await discovery.scan('phone-a')).error);
+});
+
+test('JSON 接口拒绝超量响应和重定向', async () => {
+  const server = http.createServer((req, res) => {
+    if (req.url === '/redirect') { res.writeHead(302, { Location: 'http://example.com' }); res.end(); }
+    else { res.end('x'.repeat(1024 * 1024 + 1)); }
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const port = server.address().port;
+    await assert.rejects(readJson(port, '/redirect'));
+    await assert.rejects(readJson(port, '/large'));
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

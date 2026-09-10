@@ -47,6 +47,18 @@ h1 { font-size: 12px; margin: 0; font-weight: 600; letter-spacing: 2px; }
 .device-glyph { display: block; width: 14px; height: 23px; border: 1.5px solid #88a591; border-radius: 3px; position: relative; }
 .device-glyph:after { content: ""; position: absolute; width: 4px; height: 1px; background: #88a591; bottom: 3px; left: 3.5px; }
 .sidebar-note { margin-top: auto; padding: 25px 7px; }
+.page-section-title { height: 54px; min-height: 54px; margin-top: 15px; border-top: 1px solid var(--line); }
+.page-section-title h2 { font-size: 12px; letter-spacing: 1px; margin: 0; }
+.page-section-title > .subtle { margin-left: auto; }
+.page-empty { font-size: 11px; line-height: 1.9; padding: 4px 7px 18px; color: var(--muted); }
+.page-list { display: flex; flex-direction: column; gap: 6px; }
+.page-item { display: flex; flex-direction: column; gap: 7px; min-width: 0; width: 100%; padding: 12px; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 4px; }
+.page-item:hover { background: #1c2720; }
+.page-item.selected { border-color: #3c5946; background: #203027; }
+.page-item strong { font-size: 12px; font-weight: 500; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.page-package, .page-url { font-size: 10px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.page-badge { font-size: 9px; color: #a0b7a8; }
+.selected-page-details { overflow-wrap: anywhere; max-width: 620px; }
 .eyebrow { font-size: 10px; letter-spacing: 2px; color: #738d7c; }
 .sidebar-note p { font-size: 10px; line-height: 1.9; color: #6f8175; margin: 10px 0 0; }
 .pane-heading { height: 53px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; padding: 0 19px; font-size: 11px; flex-shrink: 0; gap: 15px; }

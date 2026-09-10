@@ -2,10 +2,13 @@ import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listDevices } from './services/devices.mjs';
+import { WebViewDiscovery } from './services/webviews.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 let window: BrowserWindow | null = null;
 let adbPath = process.env.WEBVIEW_ADB_PATH || 'adb';
+const discovery = new WebViewDiscovery({ adb: () => adbPath });
+let cleanupDone = false;
 
 // 验证时隔离本工具的数据目录，避免测试影响正常使用。
 if (process.env.WEBVIEW_TEST_DATA) app.setPath('userData', process.env.WEBVIEW_TEST_DATA);
@@ -62,6 +65,14 @@ ipcMain.handle('settings:choose-adb', async (event) => {
   return true;
 });
 
+ipcMain.handle('webviews:list', async (event, serial: unknown) => {
+  trusted(event);
+  if (typeof serial !== 'string') throw new Error('设备参数无效');
+  const result = await listDevices(adbPath);
+  const available = result.devices.some((device) => device.serial === serial && device.state === 'device');
+  return discovery.scan(available ? serial : '');
+});
+
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.whenReady().then(createWindow).catch(() => {
@@ -74,3 +85,8 @@ else {
   });
 }
 app.on('window-all-closed', () => app.quit());
+app.on('before-quit', (event) => {
+  if (cleanupDone) return;
+  event.preventDefault();
+  void discovery.close().finally(() => { cleanupDone = true; app.quit(); });
+});

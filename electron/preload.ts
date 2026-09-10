@@ -4,4 +4,5 @@ import { contextBridge, ipcRenderer } from 'electron';
 contextBridge.exposeInMainWorld('workbench', {
   devices: () => ipcRenderer.invoke('devices:list'),
   chooseAdb: () => ipcRenderer.invoke('settings:choose-adb'),
+  pages: (serial: string) => ipcRenderer.invoke('webviews:list', serial),
 });
