@@ -73,9 +73,19 @@ h1 { font-size: 12px; margin: 0; font-weight: 600; letter-spacing: 2px; }
 .phone-placeholder svg { width: 44px; stroke: #607969; stroke-width: 1.2; fill: none; margin-bottom: 22px; }
 .phone-placeholder strong { font-size: 12px; font-weight: 400; color: #8ca392; }
 .phone-placeholder p { font-size: 10px; color: #627b6b; line-height: 1.8; margin: 10px 0 0; }
-.phone-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #050806; opacity: 0; }
+.phone-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #050806; opacity: 0; touch-action: none; cursor: crosshair; }
 .phone-video.visible { opacity: 1; }
+.phone-video:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 .mirror-retry { margin-top: 18px; }
+.mirror-controls { padding: 0 18px 13px; }
+.navigation-controls { display: flex; justify-content: center; gap: 8px; margin-bottom: 9px; }
+.control-button { width: 37px; height: 28px; padding: 0; border: 1px solid #354138; border-radius: 5px; background: #172019; color: #9ab4a2; }
+.control-button:hover { background: #253128; border-color: #6e8a78; color: var(--accent); }
+.text-controls { display: flex; gap: 7px; }
+.text-controls input { width: 100%; min-width: 0; color: #dce5df; background: #0d130f; border: 1px solid #354138; border-radius: 5px; padding: 7px 9px; font-size: 10px; outline: none; }
+.text-controls input:focus { border-color: #6e8a78; }
+.text-controls .quiet-button { flex-shrink: 0; padding: 6px 10px; }
+.control-error { margin: 7px 0 0; color: #ddc58e; font-size: 9px; line-height: 1.5; }
 .screen-caption { display: flex; gap: 8px; align-items: center; justify-content: center; padding: 0 15px 24px; color: #718879; font-size: 10px; }
 .inspector-pane { display: flex; flex-direction: column; min-height: 0; background: #101512; }
 .inspector-surface { display: flex; flex: 1; min-height: 0; position: relative; }

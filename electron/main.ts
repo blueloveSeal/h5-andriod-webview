@@ -23,6 +23,7 @@ interface MirrorChannel {
   port: Electron.MessagePortMain;
   credit: number;
   stopped: boolean;
+  controlQueue: Promise<void>;
   waiter?: (ready: boolean) => void;
 }
 
@@ -274,10 +275,21 @@ ipcMain.handle('mirror:start', async (event, serial: unknown) => {
       return { ok: false, error: '设备选择已变化。' };
     }
     const { port1, port2 } = new MessageChannelMain();
-    const channel: MirrorChannel = { serial, session, port: port1, credit: 0, stopped: false };
+    const channel: MirrorChannel = { serial, session, port: port1, credit: 0, stopped: false, controlQueue: Promise.resolve() };
     port1.on('message', ({ data }) => {
       if (data?.type === 'ready') grantMirrorCredit(channel);
       if (data?.type === 'stop') void closeMirror(channel);
+      if (data?.type === 'control') {
+        channel.controlQueue = channel.controlQueue.then(async () => {
+          await channel.session.control(data.control);
+          if (!channel.stopped) channel.port.postMessage({ type: 'control-ack', id: data.id });
+        }).catch((error) => {
+          if (!channel.stopped) {
+            const detail = error instanceof Error ? error.message : '输入控制失败';
+            channel.port.postMessage({ type: 'control-error', error: detail.slice(0, 120) });
+          }
+        });
+      }
     });
     port1.on('close', () => void closeMirror(channel));
     port1.start();

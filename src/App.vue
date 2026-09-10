@@ -4,6 +4,7 @@ import type { ScrcpyMediaStreamPacket, ScrcpyVideoCodecId } from '@yume-chan/scr
 import { BitmapVideoFrameRenderer, WebCodecsVideoDecoder, WebGLVideoFrameRenderer } from '@yume-chan/scrcpy-decoder-webcodecs';
 import type { Device } from '../electron/services/devices.mjs';
 import type { WebViewPage } from '../electron/services/webviews.mjs';
+import { AndroidNavigationKey, keyboardControl, limitMirrorText, mapMirrorPoint } from './mirror-input.mjs';
 
 const devices = ref<Device[]>([]);
 const selectedId = ref('');
@@ -24,6 +25,9 @@ const mirrorState = ref<'idle' | 'connecting' | 'streaming' | 'live' | 'error'>(
 const mirrorMessage = ref('连接设备后自动显示实时画面');
 const mirrorFrames = ref(0);
 const mirrorSize = ref('');
+const mirrorControlAcks = ref(0);
+const mirrorControlError = ref('');
+const mirrorText = ref('');
 const selected = computed(() => devices.value.find((device) => device.serial === selectedId.value));
 const connected = computed(() => devices.value.filter((device) => device.state === 'device').length);
 let timer: ReturnType<typeof setInterval> | undefined;
@@ -34,6 +38,11 @@ let mirrorWriter: ReturnType<WebCodecsVideoDecoder['writable']['getWriter']> | u
 let mirrorSizeListener: (() => void) | undefined;
 let mirrorFrameTimer: ReturnType<typeof setInterval> | undefined;
 let mirrorRequest = 0;
+let mirrorControlId = 0;
+let activePointer: number | undefined;
+let lastPointerPoint: { x: number; y: number } | undefined;
+let pendingPointerPoint: { x: number; y: number } | undefined;
+let pointerFrame = 0;
 
 interface MirrorMetadata {
   serial: string;
@@ -99,6 +108,11 @@ async function refreshPages() {
 }
 
 function disposeLocalMirror() {
+  cancelAnimationFrame(pointerFrame);
+  pointerFrame = 0;
+  activePointer = undefined;
+  lastPointerPoint = undefined;
+  pendingPointerPoint = undefined;
   clearInterval(mirrorFrameTimer);
   mirrorFrameTimer = undefined;
   mirrorSizeListener?.();
@@ -114,6 +128,107 @@ function disposeLocalMirror() {
   mirrorPort = undefined;
   mirrorFrames.value = 0;
   mirrorSize.value = '';
+  mirrorControlAcks.value = 0;
+  mirrorControlError.value = '';
+}
+
+function sendMirrorControl(control: object) {
+  if (!mirrorPort || mirrorState.value === 'idle' || mirrorState.value === 'error') return;
+  mirrorControlError.value = '';
+  mirrorPort.postMessage({ type: 'control', id: ++mirrorControlId, control });
+}
+
+function mirrorPoint(event: PointerEvent) {
+  const canvas = mirrorCanvas.value;
+  const decoder = mirrorDecoder;
+  if (!canvas || !decoder) return null;
+  return mapMirrorPoint(canvas.getBoundingClientRect(), decoder.width, decoder.height, event.clientX, event.clientY);
+}
+
+function pointerDown(event: PointerEvent) {
+  if (event.button !== 0 || activePointer !== undefined) return;
+  const point = mirrorPoint(event);
+  if (!point) return;
+  event.preventDefault();
+  mirrorCanvas.value?.focus();
+  activePointer = event.pointerId;
+  lastPointerPoint = point;
+  try { mirrorCanvas.value?.setPointerCapture(event.pointerId); } catch {}
+  sendMirrorControl({ kind: 'touch', phase: 'down', ...point });
+}
+
+function pointerMove(event: PointerEvent) {
+  if (event.pointerId !== activePointer) return;
+  const point = mirrorPoint(event);
+  if (!point) return;
+  event.preventDefault();
+  lastPointerPoint = point;
+  pendingPointerPoint = point;
+  if (pointerFrame) return;
+  pointerFrame = requestAnimationFrame(() => {
+    pointerFrame = 0;
+    if (!pendingPointerPoint) return;
+    sendMirrorControl({ kind: 'touch', phase: 'move', ...pendingPointerPoint });
+    pendingPointerPoint = undefined;
+  });
+}
+
+function pointerEnd(event: PointerEvent, phase: 'up' | 'cancel') {
+  if (event.pointerId !== activePointer) return;
+  event.preventDefault();
+  cancelAnimationFrame(pointerFrame);
+  pointerFrame = 0;
+  const point = mirrorPoint(event) || lastPointerPoint;
+  if (pendingPointerPoint && phase === 'up') sendMirrorControl({ kind: 'touch', phase: 'move', ...pendingPointerPoint });
+  pendingPointerPoint = undefined;
+  if (point) sendMirrorControl({ kind: 'touch', phase, ...point });
+  try { mirrorCanvas.value?.releasePointerCapture(event.pointerId); } catch {}
+  activePointer = undefined;
+  lastPointerPoint = undefined;
+}
+
+function handleMirrorKeyboard(event: KeyboardEvent) {
+  const control = keyboardControl({
+    type: event.type,
+    key: event.key,
+    code: event.code,
+    repeat: event.repeat,
+    shiftKey: event.shiftKey,
+    altKey: event.altKey,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    altGraph: event.getModifierState('AltGraph'),
+    isComposing: event.isComposing,
+  });
+  if (!control) return;
+  event.preventDefault();
+  sendMirrorControl(control);
+}
+
+function pasteMirrorText(event: ClipboardEvent) {
+  const text = limitMirrorText(event.clipboardData?.getData('text/plain'));
+  if (!text) return;
+  event.preventDefault();
+  sendMirrorControl({ kind: 'paste', text });
+}
+
+function sendMirrorText() {
+  const text = limitMirrorText(mirrorText.value);
+  if (!text) return;
+  sendMirrorControl({ kind: 'paste', text });
+  mirrorText.value = '';
+}
+
+function handleMirrorTextKey(event: KeyboardEvent) {
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+  event.preventDefault();
+  sendMirrorText();
+}
+
+function sendNavigation(keyCode: number) {
+  sendMirrorControl({ kind: 'key', phase: 'down', keyCode, repeat: 0, metaState: 0 });
+  sendMirrorControl({ kind: 'key', phase: 'up', keyCode, repeat: 0, metaState: 0 });
+  mirrorCanvas.value?.focus();
 }
 
 async function consumeMirrorMessage(port: MessagePort, message: { type?: string; packet?: ScrcpyMediaStreamPacket; error?: string }) {
@@ -128,6 +243,14 @@ async function consumeMirrorMessage(port: MessagePort, message: { type?: string;
       mirrorMessage.value = '视频解码失败，请重新连接画面。';
       disposeLocalMirror();
     }
+    return;
+  }
+  if (message.type === 'control-ack') {
+    mirrorControlAcks.value += 1;
+    return;
+  }
+  if (message.type === 'control-error') {
+    mirrorControlError.value = message.error || '输入控制失败。';
     return;
   }
   if (message.type === 'error' || message.type === 'ended') {
@@ -321,10 +444,22 @@ onUnmounted(() => {
         <div class="phone-stage">
           <div class="phone-outline">
             <div class="phone-camera"></div>
-            <canvas ref="mirrorCanvas" class="phone-video" :class="{ visible: mirrorFrames > 0 }" :data-frames="mirrorFrames" aria-label="手机实时画面"></canvas>
+            <canvas ref="mirrorCanvas" class="phone-video" :class="{ visible: mirrorFrames > 0 }" :data-frames="mirrorFrames" :data-control-acks="mirrorControlAcks" tabindex="0" aria-label="手机实时画面" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerEnd($event, 'up')" @pointercancel="pointerEnd($event, 'cancel')" @keydown="handleMirrorKeyboard" @keyup="handleMirrorKeyboard" @paste="pasteMirrorText" @contextmenu.prevent></canvas>
             <div v-if="mirrorFrames === 0" class="phone-placeholder"><svg viewBox="0 0 48 48" aria-hidden="true"><rect x="14" y="5" width="20" height="36" rx="4"/><path d="M20 10h8M22 36h4M35 21h8m-4-4 4 4-4 4"/></svg><strong>{{ mirrorState === 'connecting' || mirrorState === 'streaming' ? '正在连接画面' : selected?.state === 'device' ? '设备已连接' : selected ? status(selected.state) : '等待连接' }}</strong><p>{{ mirrorMessage }}</p><button v-if="selected?.state === 'device' && mirrorState === 'error'" class="quiet-button mirror-retry" @click="restartMirror">重新连接</button></div>
             <div class="phone-bottom"></div>
           </div>
+        </div>
+        <div v-if="mirrorState === 'live'" class="mirror-controls">
+          <div class="navigation-controls" aria-label="Android 导航键">
+            <button class="control-button" aria-label="返回" title="返回" @click="sendNavigation(AndroidNavigationKey.back)">‹</button>
+            <button class="control-button" aria-label="主页" title="主页" @click="sendNavigation(AndroidNavigationKey.home)">○</button>
+            <button class="control-button" aria-label="最近任务" title="最近任务" @click="sendNavigation(AndroidNavigationKey.recents)">□</button>
+          </div>
+          <div class="text-controls">
+            <input v-model="mirrorText" maxlength="1024" aria-label="发送文本到手机" placeholder="输入或粘贴文本" @keydown="handleMirrorTextKey" />
+            <button class="quiet-button" :disabled="!mirrorText" @click="sendMirrorText">发送</button>
+          </div>
+          <p v-if="mirrorControlError" class="control-error" role="alert">{{ mirrorControlError }}</p>
         </div>
         <div class="screen-caption"><span class="connection-dot" :class="{ online: mirrorState === 'live' }"></span>{{ mirrorState === 'live' ? '实时画面 · ' + mirrorSize : selected ? mirrorMessage : '连接后显示设备状态' }}</div>
       </section>
