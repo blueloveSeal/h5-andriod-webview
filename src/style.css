@@ -50,6 +50,8 @@ h1 { font-size: 12px; margin: 0; font-weight: 600; letter-spacing: 2px; }
 .page-section-title { height: 54px; min-height: 54px; margin-top: 15px; border-top: 1px solid var(--line); }
 .page-section-title h2 { font-size: 12px; letter-spacing: 1px; margin: 0; }
 .page-section-title > .subtle { margin-left: auto; }
+.follow-toggle { margin-left: auto; flex-shrink: 0; padding: 4px 6px; color: #718578; background: transparent; border: 1px solid #344139; border-radius: 4px; font-size: 9px; }
+.follow-toggle:hover, .follow-toggle.active { color: var(--accent); border-color: #506d5a; background: #1c2820; }
 .page-empty { font-size: 11px; line-height: 1.9; padding: 4px 7px 18px; color: var(--muted); }
 .page-list { display: flex; flex-direction: column; gap: 6px; }
 .page-item { display: flex; flex-direction: column; gap: 7px; min-width: 0; width: 100%; padding: 12px; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 4px; }

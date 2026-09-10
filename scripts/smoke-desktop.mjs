@@ -69,19 +69,32 @@ try {
     await canvas.press('ArrowDown');
     await page.waitForFunction((count) => Number(document.querySelector('.phone-video')?.getAttribute('data-control-acks')) >= count + 2, dragAcks);
     const keyAcks = Number(await canvas.getAttribute('data-control-acks'));
-    await page.getByRole('textbox', { name: '发送文本到手机' }).fill('A');
-    await page.getByRole('textbox', { name: '发送文本到手机' }).press('Enter');
+    await canvas.press('A');
     await page.waitForFunction((count) => Number(document.querySelector('.phone-video')?.getAttribute('data-control-acks')) >= count + 1, keyAcks);
     const controlWrites = Number(await canvas.getAttribute('data-control-acks')) - controlAcks;
     const result = await page.evaluate((serial) => window.workbench.pages(serial), device.serial);
     assert.ok(result.pages.length > 0, '需要 APP 打开已启用调试的 WebView');
     await page.locator('.page-item').first().waitFor();
     assert.equal(await page.locator('.page-item').count(), result.pages.length);
-    await page.locator('.page-item').last().click();
-    assert.equal(await page.locator('.page-item').last().getAttribute('aria-pressed'), 'true');
-    await page.locator('.page-item').first().click();
-    await page.locator('.open-inspector').click();
+    const candidateIndex = result.pages.findIndex((entry) => entry.candidate);
+    assert.ok(candidateIndex >= 0, '需要唯一屏幕内候选页面');
+    const candidatePage = page.locator('.page-item').nth(candidateIndex);
+    await page.waitForFunction((index) => document.querySelectorAll('.page-item')[index]?.getAttribute('aria-pressed') === 'true', candidateIndex);
+    assert.equal(await page.locator('.follow-toggle').getAttribute('aria-pressed'), 'true');
     await page.waitForFunction(() => Boolean(document.querySelector('.inspector-close')) || Boolean(document.querySelector('.inspector-error')?.textContent));
+    const manualIndex = result.pages.findIndex((entry) => !entry.candidate);
+    if (manualIndex >= 0) {
+      const manualPage = page.locator('.page-item').nth(manualIndex);
+      await manualPage.click();
+      await page.waitForFunction((index) => document.querySelectorAll('.page-item')[index]?.getAttribute('aria-pressed') === 'true'
+        && document.querySelector('.follow-toggle')?.getAttribute('aria-pressed') === 'false', manualIndex);
+      await page.waitForFunction(() => Boolean(document.querySelector('.inspector-close')) || Boolean(document.querySelector('.inspector-error')?.textContent));
+      await page.locator('.follow-toggle').click();
+      await page.waitForFunction((index) => document.querySelectorAll('.page-item')[index]?.getAttribute('aria-pressed') === 'true'
+        && document.querySelector('.follow-toggle')?.getAttribute('aria-pressed') === 'true', candidateIndex);
+      await page.waitForFunction(() => Boolean(document.querySelector('.inspector-close')) || Boolean(document.querySelector('.inspector-error')?.textContent));
+    }
+    assert.equal(await candidatePage.getAttribute('aria-pressed'), 'true');
     const inspectorError = await page.locator('.inspector-error').textContent().catch(() => '');
     assert.equal(inspectorError, '', inspectorError || 'DevTools 未进入打开状态');
     await page.waitForTimeout(4000);

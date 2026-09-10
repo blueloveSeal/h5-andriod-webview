@@ -5,6 +5,7 @@ import { BitmapVideoFrameRenderer, WebCodecsVideoDecoder, WebGLVideoFrameRendere
 import type { Device } from '../electron/services/devices.mjs';
 import type { WebViewPage } from '../electron/services/webviews.mjs';
 import { AndroidNavigationKey, keyboardControl, limitMirrorText, mapMirrorPoint } from './mirror-input.mjs';
+import { choosePageTarget, uniqueScreenCandidate } from './page-follow.mjs';
 
 const devices = ref<Device[]>([]);
 const selectedId = ref('');
@@ -20,6 +21,7 @@ const inspectorHost = ref<HTMLElement>();
 const inspectorOpen = ref(false);
 const inspectorLoading = ref(false);
 const inspectorError = ref('');
+const autoFollow = ref(true);
 const mirrorCanvas = ref<HTMLCanvasElement>();
 const mirrorState = ref<'idle' | 'connecting' | 'streaming' | 'live' | 'error'>('idle');
 const mirrorMessage = ref('连接设备后自动显示实时画面');
@@ -43,6 +45,8 @@ let activePointer: number | undefined;
 let lastPointerPoint: { x: number; y: number } | undefined;
 let pendingPointerPoint: { x: number; y: number } | undefined;
 let pointerFrame = 0;
+let lastAutoInspectorTarget = '';
+let pendingManualTarget = '';
 
 interface MirrorMetadata {
   serial: string;
@@ -94,9 +98,9 @@ async function refreshPages() {
     if (serial !== (selected.value?.state === 'device' ? selectedId.value : '')) return;
     pages.value = result.pages;
     pageError.value = result.error || '';
-    if (!result.pages.some((page) => page.id === selectedPageId.value)) {
-      selectedPageId.value = result.pages[0]?.id || '';
-    }
+    const targetId = choosePageTarget(result.pages, selectedPageId.value, autoFollow.value);
+    if (targetId !== selectedPageId.value) selectedPageId.value = targetId;
+    else void ensureAutoInspector();
   } catch {
     pages.value = [];
     selectedPageId.value = '';
@@ -105,6 +109,35 @@ async function refreshPages() {
     pagesLoading.value = false;
     if (serial !== (selected.value?.state === 'device' ? selectedId.value : '')) void refreshPages();
   }
+}
+
+async function ensureAutoInspector() {
+  const candidate = uniqueScreenCandidate(pages.value);
+  if (!autoFollow.value || !candidate || candidate.id !== selectedPageId.value
+    || inspectorOpen.value || inspectorLoading.value || lastAutoInspectorTarget === candidate.id) return;
+  lastAutoInspectorTarget = candidate.id;
+  await openInspector();
+}
+
+function selectPageManually(targetId: string) {
+  autoFollow.value = false;
+  lastAutoInspectorTarget = '';
+  if (selectedPageId.value === targetId) {
+    if (!inspectorOpen.value && !inspectorLoading.value) void openInspector();
+    return;
+  }
+  pendingManualTarget = targetId;
+  selectedPageId.value = targetId;
+}
+
+function toggleAutoFollow() {
+  autoFollow.value = !autoFollow.value;
+  pendingManualTarget = '';
+  lastAutoInspectorTarget = '';
+  if (!autoFollow.value) return;
+  const targetId = choosePageTarget(pages.value, selectedPageId.value, true);
+  if (targetId !== selectedPageId.value) selectedPageId.value = targetId;
+  else void ensureAutoInspector();
 }
 
 function disposeLocalMirror() {
@@ -343,7 +376,8 @@ function syncInspectorBounds() {
   if (inspectorOpen.value && rect) void window.workbench?.inspector.bounds(rect);
 }
 
-async function closeInspector() {
+async function closeInspector(manual = false) {
+  if (manual) autoFollow.value = false;
   inspectorOpen.value = false;
   inspectorLoading.value = false;
   await window.workbench?.inspector.close();
@@ -380,9 +414,21 @@ watch([selectedId, () => selected.value?.state], () => {
   void restartMirror();
 });
 
-watch(selectedPageId, (value, previous) => {
-  if (value !== previous && inspectorOpen.value) void closeInspector();
+watch(selectedId, () => {
+  autoFollow.value = true;
+  lastAutoInspectorTarget = '';
+  pendingManualTarget = '';
+});
+
+watch(selectedPageId, async (value, previous) => {
+  if (value !== previous && inspectorOpen.value) await closeInspector();
   inspectorError.value = '';
+  if (pendingManualTarget === value) {
+    pendingManualTarget = '';
+    if (value) void openInspector();
+  } else {
+    void ensureAutoInspector();
+  }
 });
 
 async function chooseAdb() {
@@ -425,11 +471,11 @@ onUnmounted(() => {
             <span class="device-glyph"></span><span class="device-copy"><strong>{{ device.model }}</strong><span>{{ status(device.state) }}</span></span><span class="connection-dot" :class="{ online: device.state === 'device' }"></span>
           </button>
         </div>
-        <div class="section-title page-section-title"><h2>WebView 页面</h2><span class="count">{{ pages.length }}</span><span v-if="pagesLoading" class="subtle">扫描中</span></div>
+        <div class="section-title page-section-title"><h2>WebView 页面</h2><span class="count">{{ pages.length }}</span><button class="follow-toggle" :class="{ active: autoFollow }" :aria-pressed="autoFollow" :title="autoFollow ? '自动跟随屏幕内页面' : '当前页面已锁定'" @click="toggleAutoFollow">{{ autoFollow ? '跟随中' : '已锁定' }}</button><span v-if="pagesLoading" class="subtle">扫描中</span></div>
         <div v-if="pageError" class="inline-error" role="alert">{{ pageError }}</div>
         <div v-if="!pages.length" class="page-empty">{{ selected?.state === 'device' ? '打开 APP 中已启用调试的 WebView，页面会自动出现在这里。' : '连接并授权设备后发现页面。' }}</div>
         <div class="page-list" aria-label="WebView 页面列表">
-          <button v-for="page in pages" :key="page.id" class="page-item" :class="{ selected: selectedPageId === page.id }" :aria-pressed="selectedPageId === page.id" @click="selectedPageId = page.id">
+          <button v-for="page in pages" :key="page.id" class="page-item" :class="{ selected: selectedPageId === page.id }" :aria-pressed="selectedPageId === page.id" @click="selectPageManually(page.id)">
             <span class="page-package">{{ page.packageName }}</span>
             <strong>{{ page.title }}</strong>
             <span class="page-url" :title="page.url">{{ page.url }}</span>
@@ -467,7 +513,7 @@ onUnmounted(() => {
       <section class="inspector-pane">
         <div class="pane-heading">
           <span>WebView 调试</span>
-          <button v-if="inspectorOpen" class="quiet-button inspector-close" @click="closeInspector">关闭面板</button>
+          <button v-if="inspectorOpen" class="quiet-button inspector-close" @click="closeInspector(true)">关闭面板</button>
           <span v-else class="mono subtle">DEVTOOLS</span>
         </div>
         <div ref="inspectorHost" class="inspector-surface">
@@ -478,7 +524,7 @@ onUnmounted(() => {
           <p v-if="selectedPage" class="selected-page-details">{{ selectedPage.packageName }}<br />{{ selectedPage.url }}<br />{{ selectedPage.browser }}</p>
           <p v-else>连接手机并打开 APP 中的 WebView 页面。<br />可调试页面会出现在左侧列表中。</p>
           <div v-if="inspectorError" class="inspector-error" role="alert">{{ inspectorError }}</div>
-          <button v-if="selectedPage" class="primary-button open-inspector" :disabled="inspectorLoading" @click="openInspector">{{ inspectorLoading ? '正在连接…' : '打开 DevTools' }} <span>→</span></button>
+          <button v-if="selectedPage" class="primary-button open-inspector" :disabled="inspectorLoading" @click="openInspector()">{{ inspectorLoading ? '正在连接…' : '打开 DevTools' }} <span>→</span></button>
           <button v-else class="primary-button" :disabled="loading" @click="refresh">{{ loading ? '正在检查设备…' : '检查设备连接' }} <span>→</span></button>
           <div class="setup-steps"><span><b>01</b>连接 USB</span><i></i><span><b>02</b>允许调试</span><i></i><span><b>03</b>打开 APP</span></div>
         </div>

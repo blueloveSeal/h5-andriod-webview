@@ -53,6 +53,11 @@ export function screenSize(output) {
   return last ? { width: Number(last[1]), height: Number(last[2]) } : null;
 }
 
+export function foregroundPackage(output) {
+  const match = output.match(/(?:topResumedActivity|mResumedActivity|ResumedActivity)\s*[:=].*?\s([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+)\/[A-Za-z0-9_.$]+/);
+  return match?.[1] || '';
+}
+
 export function pageGeometry(description, screen) {
   let rect;
   try { rect = JSON.parse(description); } catch { rect = {}; }
@@ -133,10 +138,16 @@ export class WebViewDiscovery {
     }
     let sockets;
     let screen = null;
+    let foreground = '';
     try {
       sockets = socketNames(await this.run(adb, ['-s', serial, 'shell', 'cat', '/proc/net/unix']));
       if (sockets.length) {
-        try { screen = screenSize(await this.run(adb, ['-s', serial, 'shell', 'wm', 'size'])); } catch {}
+        const [sizeResult, foregroundResult] = await Promise.allSettled([
+          this.run(adb, ['-s', serial, 'shell', 'wm', 'size']),
+          this.run(adb, ['-s', serial, 'shell', 'dumpsys', 'activity', 'activities']),
+        ]);
+        if (sizeResult.status === 'fulfilled') screen = screenSize(sizeResult.value);
+        if (foregroundResult.status === 'fulfilled') foreground = foregroundPackage(foregroundResult.value);
       }
     } catch {
       for (const key of this.forwards.keys()) await this.removeForward(key);
@@ -167,10 +178,12 @@ export class WebViewDiscovery {
           // 仅使用已拥有转发的 localhost 端口，忽略手机响应中的主机名。
           if (endpoint.protocol !== 'ws:' || !endpoint.pathname.startsWith('/devtools/page/') || endpoint.search || endpoint.hash) continue;
           const id = JSON.stringify([serial, socket, target.id]);
+          const packageName = text(version?.['Android-Package'], 256) || '未知 APP';
+          const geometry = pageGeometry(target.description, screen);
           const page = {
-            id, title: text(target.title, 512) || '未命名页面', url: text(target.url),
-            packageName: text(version?.['Android-Package'], 256) || '未知 APP',
-            browser: text(version?.Browser, 128), ...pageGeometry(target.description, screen),
+            id, title: text(target.title, 512) || '未命名页面', url: text(target.url), packageName,
+            browser: text(version?.Browser, 128), ...geometry,
+            candidate: geometry.candidate && packageName === foreground,
           };
           pages.push(page);
           nextTargets.set(id, {
@@ -184,9 +197,10 @@ export class WebViewDiscovery {
         // 调试连接占用期间，HTTP 列表可能短暂不可读；保留上一轮目标和端口，避免切断已打开的 DevTools。
         for (const [id, previous] of this.targets) {
           if (previous.serial !== serial || previous.socket !== socket) continue;
-          const { endpoint, frontend, serial: _serial, socket: _socket, ...page } = previous;
+          const preserved = { ...previous, candidate: previous.candidate && previous.packageName === foreground };
+          const { endpoint, frontend, serial: _serial, socket: _socket, ...page } = preserved;
           pages.push(page);
-          nextTargets.set(id, previous);
+          nextTargets.set(id, preserved);
         }
       }
     }

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { WebViewDiscovery, frontendEntry, pageGeometry, socketNames, screenSize, readJson } from '../electron/services/webviews.mjs';
+import { WebViewDiscovery, foregroundPackage, frontendEntry, pageGeometry, socketNames, screenSize, readJson } from '../electron/services/webviews.mjs';
 
 test('调试 socket 去重并拒绝非 WebView 名称', () => {
   assert.deepEqual(socketNames('@webview_devtools_remote_12\n@webview_devtools_remote_12\n@chrome_devtools_remote\n@webview_devtools_remote_BAD'), ['webview_devtools_remote_12']);
@@ -19,6 +19,12 @@ test('预加载页面即使 visible 为真，也不能作为屏幕内候选', ()
   assert.equal(pageGeometry(description(0), null).candidate, false);
 });
 
+test('只从 Android 已恢复 Activity 标记提取前台包名', () => {
+  assert.equal(foregroundPackage('topResumedActivity=ActivityRecord{abc u0 org.example.app/.MainActivity t42}'), 'org.example.app');
+  assert.equal(foregroundPackage('ResumedActivity: ActivityRecord{abc u0 com.example/com.example.Main t3}'), 'com.example');
+  assert.equal(foregroundPackage('mFocusedApp=ActivityRecord{abc u0 org.background/.Main}'), '');
+});
+
 test('只接受 Chrome 官方且带固定修订号的远程前端', () => {
   const valid = 'https://chrome-devtools-frontend.appspot.com/serve_rev/@be2c1f4fd451578a9ada68a0ac12d659362b44bf/inspector.html?ws=untrusted';
   assert.equal(frontendEntry(valid), valid.split('?')[0]);
@@ -33,6 +39,7 @@ function fixture() {
   let fail = false;
   let jsonFail = false;
   let forward = false;
+  let foreground = 'org.example.app';
   const discovery = new WebViewDiscovery({
     run: async (file, args) => {
       calls.push(args);
@@ -41,6 +48,7 @@ function fixture() {
         return sockets;
       }
       if (args.includes('wm')) return 'Physical size: 1280x2778';
+      if (args.includes('dumpsys')) return 'topResumedActivity=ActivityRecord{abc u0 ' + foreground + '/.Main t1}';
       if (args.includes('tcp:0')) { forward = true; return '43210'; }
       if (args.includes('--list')) return forward ? 'phone-a tcp:43210 localabstract:webview_devtools_remote_12\nother tcp:9999 localabstract:other' : '';
       if (args.includes('--remove')) { forward = false; return ''; }
@@ -49,12 +57,12 @@ function fixture() {
     json: async (_port, route) => {
       if (jsonFail) throw new Error('busy');
       return route.endsWith('version') ? { 'Android-Package': 'org.example.app', Browser: 'Chrome/143' } : [
-        { id: 'page-1', type: 'page', title: 'Example', url: 'https://example.com', webSocketDebuggerUrl: 'ws://untrusted.example/devtools/page/page-1', devtoolsFrontendUrl: 'https://chrome-devtools-frontend.appspot.com/serve_rev/@be2c1f4fd451578a9ada68a0ac12d659362b44bf/inspector.html?ws=ignored', description: '{}' },
+        { id: 'page-1', type: 'page', title: 'Example', url: 'https://example.com', webSocketDebuggerUrl: 'ws://untrusted.example/devtools/page/page-1', devtoolsFrontendUrl: 'https://chrome-devtools-frontend.appspot.com/serve_rev/@be2c1f4fd451578a9ada68a0ac12d659362b44bf/inspector.html?ws=ignored', description: '{"visible":true,"attached":true,"width":1280,"height":2400,"screenX":0,"screenY":100}' },
         { id: 'bad', type: 'page', webSocketDebuggerUrl: 'wss://example.com/anything' },
       ];
     },
   });
-  return { discovery, calls, disappear: () => { sockets = ''; }, fail: () => { fail = true; }, failJson: () => { jsonFail = true; } };
+  return { discovery, calls, disappear: () => { sockets = ''; }, fail: () => { fail = true; }, failJson: () => { jsonFail = true; }, background: () => { foreground = 'com.android.launcher'; } };
 }
 
 test('只使用自建 localhost 转发，保留稳定目标标识并复用端口', async () => {
@@ -62,6 +70,7 @@ test('只使用自建 localhost 转发，保留稳定目标标识并复用端口
   const first = await discovery.scan('phone-a');
   assert.equal(first.pages.length, 1);
   assert.equal(first.pages[0].packageName, 'org.example.app');
+  assert.equal(first.pages[0].candidate, true);
   assert.equal(discovery.target(first.pages[0].id).endpoint, 'ws://127.0.0.1:43210/devtools/page/page-1');
   assert.match(discovery.target(first.pages[0].id).frontend, /^https:\/\/chrome-devtools-frontend\.appspot\.com\/serve_rev\/@/);
   const second = await discovery.scan('phone-a');
@@ -69,6 +78,14 @@ test('只使用自建 localhost 转发，保留稳定目标标识并复用端口
   assert.equal(calls.filter((args) => args.includes('tcp:0')).length, 1);
   await discovery.close();
   assert.deepEqual(calls.at(-1), ['-s', 'phone-a', 'forward', '--remove', 'tcp:43210']);
+});
+
+test('后台 APP 即使页面几何信息可见也不能成为自动跟随候选', async () => {
+  const { discovery, background } = fixture();
+  assert.equal((await discovery.scan('phone-a')).pages[0].candidate, true);
+  background();
+  assert.equal((await discovery.scan('phone-a')).pages[0].candidate, false);
+  await discovery.close();
 });
 
 test('页面进程消失后清理目标和所属转发', async () => {
@@ -123,6 +140,7 @@ test('刷新进行中保留上一轮目标，完成后再原子替换', async ()
         return '@webview_devtools_remote_12';
       }
       if (args.includes('wm')) return 'Physical size: 1280x2778';
+      if (args.includes('dumpsys')) return 'topResumedActivity=ActivityRecord{abc u0 org.example.app/.Main t1}';
       if (args.includes('tcp:0')) return '43210';
       if (args.includes('--list')) return 'phone-a tcp:43210 localabstract:webview_devtools_remote_12';
       if (args.includes('--remove')) return '';
