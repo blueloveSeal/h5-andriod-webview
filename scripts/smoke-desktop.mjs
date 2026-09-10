@@ -46,6 +46,13 @@ try {
   if (verifyWebview) {
     const device = state.devices.find((entry) => entry.state === 'device');
     assert.ok(device, '需要已授权的 USB 真机');
+    await page.waitForFunction(() => Number(document.querySelector('.phone-video')?.getAttribute('data-frames')) > 0, undefined, { timeout: 30000 });
+    const mirror = await page.locator('.phone-video').evaluate((canvas) => ({
+      frames: Number(canvas.getAttribute('data-frames')),
+      width: canvas.width,
+      height: canvas.height,
+    }));
+    assert.ok(mirror.frames > 0 && mirror.width > 0 && mirror.height > 0, JSON.stringify(mirror));
     const result = await page.evaluate((serial) => window.workbench.pages(serial), device.serial);
     assert.ok(result.pages.length > 0, '需要 APP 打开已启用调试的 WebView');
     await page.locator('.page-item').first().waitFor();
@@ -81,7 +88,7 @@ try {
     assert.equal(devtools.hasElementsPanel, true, JSON.stringify(devtools));
     assert.equal(devtools.disconnected, false, JSON.stringify(devtools));
     assert.match(devtools.url, /^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f]{40}\/inspector\.html\?/);
-    console.log('WebView 真机验证通过：页面数量 ' + result.pages.length + '，屏幕内候选 ' + result.pages.filter((entry) => entry.candidate).length + '，内嵌 DevTools 已加载（Electron Chromium ' + devtools.chrome + '）。');
+    console.log('WebView 真机验证通过：手机画面 ' + mirror.width + '×' + mirror.height + ' / ' + mirror.frames + ' 帧，页面数量 ' + result.pages.length + '，屏幕内候选 ' + result.pages.filter((entry) => entry.candidate).length + '，内嵌 DevTools 已加载（Electron Chromium ' + devtools.chrome + '）。');
   }
   if (process.argv.includes('--screenshot')) await page.screenshot({ path: path.join(artifactRoot, 'desktop.png') });
   console.log('桌面验证通过：窗口、受限 IPC、设备刷新、布局和进程隔离。设备数量：' + state.devices.length);

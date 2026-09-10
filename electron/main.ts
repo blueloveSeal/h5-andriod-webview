@@ -1,18 +1,30 @@
-import { app, BrowserWindow, dialog, ipcMain, net, WebContentsView } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, net, WebContentsView } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listDevices } from './services/devices.mjs';
 import { WebViewDiscovery } from './services/webviews.mjs';
 import { inspectorBounds, inspectorUrl, startInspectorFrontend } from './services/inspector.mjs';
+import { SCRCPY_SERVER_FILENAME, startDeviceMirror } from './services/mirror.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 let window: BrowserWindow | null = null;
 let inspectorView: WebContentsView | null = null;
 let inspectorTargetId = '';
 let inspectorFrontend: Awaited<ReturnType<typeof startInspectorFrontend>> | null = null;
+let mirrorChannel: MirrorChannel | null = null;
+let mirrorToken = 0;
 let adbPath = process.env.WEBVIEW_ADB_PATH || 'adb';
 const discovery = new WebViewDiscovery({ adb: () => adbPath });
 let cleanupDone = false;
+
+interface MirrorChannel {
+  serial: string;
+  session: Awaited<ReturnType<typeof startDeviceMirror>>;
+  port: Electron.MessagePortMain;
+  credit: number;
+  stopped: boolean;
+  waiter?: (ready: boolean) => void;
+}
 
 // 验证时隔离本工具的数据目录，避免测试影响正常使用。
 if (process.env.WEBVIEW_TEST_DATA) app.setPath('userData', process.env.WEBVIEW_TEST_DATA);
@@ -31,6 +43,62 @@ function closeInspector() {
   inspectorView.webContents?.close({ waitForBeforeUnload: false });
   inspectorView = null;
   inspectorTargetId = '';
+}
+
+async function closeMirror(channel = mirrorChannel) {
+  if (!channel || channel.stopped) return;
+  channel.stopped = true;
+  if (mirrorChannel === channel) mirrorChannel = null;
+  channel.waiter?.(false);
+  channel.waiter = undefined;
+  channel.port.close();
+  await channel.session.close();
+}
+
+function waitForMirrorCredit(channel: MirrorChannel) {
+  if (channel.stopped) return Promise.resolve(false);
+  if (channel.credit > 0) {
+    channel.credit -= 1;
+    return Promise.resolve(true);
+  }
+  return new Promise<boolean>((resolve) => { channel.waiter = resolve; });
+}
+
+function grantMirrorCredit(channel: MirrorChannel) {
+  if (channel.stopped) return;
+  if (channel.waiter) {
+    const resolve = channel.waiter;
+    channel.waiter = undefined;
+    resolve(true);
+  } else {
+    channel.credit = 1;
+  }
+}
+
+async function pumpMirror(channel: MirrorChannel) {
+  try {
+    while (await waitForMirrorCredit(channel)) {
+      const result = await channel.session.read();
+      if (result.done) break;
+      const packet = result.value;
+      channel.port.postMessage({
+        type: 'packet',
+        packet: {
+          type: packet.type,
+          data: packet.data.slice(),
+          ...(packet.type === 'data' ? { keyframe: packet.keyframe, pts: packet.pts } : {}),
+        },
+      });
+    }
+    if (!channel.stopped) channel.port.postMessage({ type: 'ended' });
+  } catch (error) {
+    if (!channel.stopped) {
+      const detail = error instanceof Error ? error.message : '';
+      channel.port.postMessage({ type: 'error', error: detail.slice(0, 160) });
+    }
+  } finally {
+    await closeMirror(channel);
+  }
 }
 
 function updateInspectorBounds(value: unknown) {
@@ -191,6 +259,46 @@ ipcMain.handle('inspector:close', (event) => {
   closeInspector();
 });
 
+ipcMain.handle('mirror:start', async (event, serial: unknown) => {
+  trusted(event);
+  if (typeof serial !== 'string') return { ok: false, error: '设备参数无效。' };
+  const token = ++mirrorToken;
+  await closeMirror();
+  try {
+    const session = await startDeviceMirror({
+      serial,
+      serverPath: path.join(app.getAppPath(), 'vendor/scrcpy', SCRCPY_SERVER_FILENAME),
+    });
+    if (token !== mirrorToken || !window) {
+      await session.close();
+      return { ok: false, error: '设备选择已变化。' };
+    }
+    const { port1, port2 } = new MessageChannelMain();
+    const channel: MirrorChannel = { serial, session, port: port1, credit: 0, stopped: false };
+    port1.on('message', ({ data }) => {
+      if (data?.type === 'ready') grantMirrorCredit(channel);
+      if (data?.type === 'stop') void closeMirror(channel);
+    });
+    port1.on('close', () => void closeMirror(channel));
+    port1.start();
+    mirrorChannel = channel;
+    window.webContents.postMessage('mirror:stream', { serial, ...session.metadata }, [port2]);
+    void pumpMirror(channel);
+    return { ok: true, error: null };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : '';
+    if (/未连接|授权/.test(detail)) return { ok: false, error: '设备未连接或尚未授权。' };
+    if (/校验失败/.test(detail)) return { ok: false, error: '手机画面组件校验失败，请重新安装。' };
+    return { ok: false, error: '手机画面启动失败' + (detail ? '：' + detail.slice(0, 120) : '。') };
+  }
+});
+
+ipcMain.handle('mirror:stop', async (event) => {
+  trusted(event);
+  mirrorToken += 1;
+  await closeMirror();
+});
+
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.whenReady().then(createWindow).catch(() => {
@@ -207,7 +315,7 @@ app.on('before-quit', (event) => {
   if (cleanupDone) return;
   event.preventDefault();
   closeInspector();
-  void Promise.all([discovery.close(), inspectorFrontend?.close()]).finally(() => {
+  void Promise.all([closeMirror(), discovery.close(), inspectorFrontend?.close()]).finally(() => {
     inspectorFrontend = null;
     cleanupDone = true;
     app.quit();

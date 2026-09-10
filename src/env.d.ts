@@ -9,6 +9,10 @@ declare global {
       devices(): Promise<DeviceList>;
       chooseAdb(): Promise<boolean>;
       pages(serial: string): Promise<PageList>;
+      mirror: {
+        start(serial: string): Promise<{ ok: boolean; error: string | null }>;
+        stop(): Promise<void>;
+      };
       inspector: {
         open(targetId: string, bounds: DOMRectLike): Promise<{ ok: boolean; error: string | null }>;
         bounds(bounds: DOMRectLike): Promise<boolean>;

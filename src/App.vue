@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import type { ScrcpyMediaStreamPacket, ScrcpyVideoCodecId } from '@yume-chan/scrcpy';
+import { BitmapVideoFrameRenderer, WebCodecsVideoDecoder, WebGLVideoFrameRenderer } from '@yume-chan/scrcpy-decoder-webcodecs';
 import type { Device } from '../electron/services/devices.mjs';
 import type { WebViewPage } from '../electron/services/webviews.mjs';
 
@@ -17,10 +19,30 @@ const inspectorHost = ref<HTMLElement>();
 const inspectorOpen = ref(false);
 const inspectorLoading = ref(false);
 const inspectorError = ref('');
+const mirrorCanvas = ref<HTMLCanvasElement>();
+const mirrorState = ref<'idle' | 'connecting' | 'streaming' | 'live' | 'error'>('idle');
+const mirrorMessage = ref('连接设备后自动显示实时画面');
+const mirrorFrames = ref(0);
+const mirrorSize = ref('');
 const selected = computed(() => devices.value.find((device) => device.serial === selectedId.value));
 const connected = computed(() => devices.value.filter((device) => device.state === 'device').length);
 let timer: ReturnType<typeof setInterval> | undefined;
 let inspectorObserver: ResizeObserver | undefined;
+let mirrorPort: MessagePort | undefined;
+let mirrorDecoder: WebCodecsVideoDecoder | undefined;
+let mirrorWriter: ReturnType<WebCodecsVideoDecoder['writable']['getWriter']> | undefined;
+let mirrorSizeListener: (() => void) | undefined;
+let mirrorFrameTimer: ReturnType<typeof setInterval> | undefined;
+let mirrorRequest = 0;
+
+interface MirrorMetadata {
+  serial: string;
+  codec: ScrcpyVideoCodecId;
+  codecName: string;
+  deviceName: string;
+  width: number;
+  height: number;
+}
 
 function status(state: string) {
   if (state === 'device') return '已连接';
@@ -76,6 +98,118 @@ async function refreshPages() {
   }
 }
 
+function disposeLocalMirror() {
+  clearInterval(mirrorFrameTimer);
+  mirrorFrameTimer = undefined;
+  mirrorSizeListener?.();
+  mirrorSizeListener = undefined;
+  try { mirrorWriter?.releaseLock(); } catch {}
+  mirrorWriter = undefined;
+  mirrorDecoder?.dispose();
+  mirrorDecoder = undefined;
+  if (mirrorPort) {
+    mirrorPort.postMessage({ type: 'stop' });
+    mirrorPort.close();
+  }
+  mirrorPort = undefined;
+  mirrorFrames.value = 0;
+  mirrorSize.value = '';
+}
+
+async function consumeMirrorMessage(port: MessagePort, message: { type?: string; packet?: ScrcpyMediaStreamPacket; error?: string }) {
+  if (port !== mirrorPort) return;
+  if (message.type === 'packet' && message.packet && mirrorWriter && mirrorDecoder) {
+    try {
+      const packet = { ...message.packet, data: new Uint8Array(message.packet.data) } as ScrcpyMediaStreamPacket;
+      await mirrorWriter.write(packet);
+      if (port === mirrorPort) port.postMessage({ type: 'ready' });
+    } catch {
+      mirrorState.value = 'error';
+      mirrorMessage.value = '视频解码失败，请重新连接画面。';
+      disposeLocalMirror();
+    }
+    return;
+  }
+  if (message.type === 'error' || message.type === 'ended') {
+    mirrorState.value = 'error';
+    mirrorMessage.value = message.error ? '画面连接已中断：' + message.error : '画面连接已结束，请重新连接。';
+    disposeLocalMirror();
+  }
+}
+
+function acceptMirrorPort(event: MessageEvent) {
+  if (event.source !== window || event.data?.type !== 'workbench:mirror-stream') return;
+  const metadata = event.data.metadata as MirrorMetadata | undefined;
+  const port = event.ports[0];
+  if (!metadata || metadata.serial !== selectedId.value || !port || !mirrorCanvas.value) {
+    port?.close();
+    return;
+  }
+  disposeLocalMirror();
+  try {
+    if (!WebCodecsVideoDecoder.isSupported) throw new Error('当前 Chromium 不支持 WebCodecs');
+    const renderer = WebGLVideoFrameRenderer.isSupported
+      ? new WebGLVideoFrameRenderer(mirrorCanvas.value)
+      : new BitmapVideoFrameRenderer(mirrorCanvas.value);
+    const decoder = new WebCodecsVideoDecoder({ codec: metadata.codec, renderer });
+    mirrorPort = port;
+    mirrorDecoder = decoder;
+    mirrorWriter = decoder.writable.getWriter();
+    mirrorState.value = 'streaming';
+    mirrorMessage.value = '正在接收实时画面…';
+    if (metadata.width && metadata.height) mirrorSize.value = metadata.width + ' × ' + metadata.height;
+    mirrorSizeListener = decoder.sizeChanged(({ width, height }) => {
+      mirrorSize.value = width + ' × ' + height;
+    });
+    mirrorFrameTimer = setInterval(() => {
+      if (decoder !== mirrorDecoder) return;
+      mirrorFrames.value = decoder.framesRendered;
+      if (decoder.framesRendered > 0) {
+        mirrorState.value = 'live';
+        mirrorMessage.value = metadata.codecName + ' · ' + mirrorSize.value;
+      }
+    }, 200);
+    port.onmessage = (message) => void consumeMirrorMessage(port, message.data);
+    port.start();
+    port.postMessage({ type: 'ready' });
+  } catch (error) {
+    port.close();
+    mirrorState.value = 'error';
+    mirrorMessage.value = error instanceof Error ? error.message : '无法初始化视频解码器。';
+  }
+}
+
+async function restartMirror() {
+  const request = ++mirrorRequest;
+  disposeLocalMirror();
+  await window.workbench?.mirror.stop();
+  if (request !== mirrorRequest) return;
+  const serial = selected.value?.state === 'device' ? selectedId.value : '';
+  if (!serial || !window.workbench) {
+    mirrorState.value = 'idle';
+    mirrorMessage.value = selected.value?.state === 'unauthorized'
+      ? '请在手机上允许此电脑进行 USB 调试'
+      : '连接设备后自动显示实时画面';
+    return;
+  }
+  mirrorState.value = 'connecting';
+  mirrorMessage.value = '正在启动实时画面…';
+  try {
+    const result = await window.workbench.mirror.start(serial);
+    if (request !== mirrorRequest) {
+      await window.workbench.mirror.stop();
+      return;
+    }
+    if (!result.ok) {
+      mirrorState.value = 'error';
+      mirrorMessage.value = result.error || '手机画面启动失败。';
+    }
+  } catch {
+    mirrorState.value = 'error';
+    mirrorMessage.value = '手机画面连接暂时不可用。';
+  }
+}
+
 function inspectorRect() {
   const rect = inspectorHost.value?.getBoundingClientRect();
   return rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
@@ -120,6 +254,7 @@ watch([selectedId, () => selected.value?.state], () => {
   selectedPageId.value = '';
   pageError.value = '';
   void refreshPages();
+  void restartMirror();
 });
 
 watch(selectedPageId, (value, previous) => {
@@ -132,14 +267,19 @@ async function chooseAdb() {
 }
 
 onMounted(() => {
+  window.addEventListener('message', acceptMirrorPort);
   void refresh();
   timer = setInterval(() => void refresh(), 3000);
   inspectorObserver = new ResizeObserver(syncInspectorBounds);
   if (inspectorHost.value) inspectorObserver.observe(inspectorHost.value);
 });
 onUnmounted(() => {
+  window.removeEventListener('message', acceptMirrorPort);
+  mirrorRequest += 1;
   clearInterval(timer);
   inspectorObserver?.disconnect();
+  disposeLocalMirror();
+  void window.workbench?.mirror.stop();
   void closeInspector();
 });
 </script>
@@ -181,11 +321,12 @@ onUnmounted(() => {
         <div class="phone-stage">
           <div class="phone-outline">
             <div class="phone-camera"></div>
-            <div class="phone-placeholder"><svg viewBox="0 0 48 48" aria-hidden="true"><rect x="14" y="5" width="20" height="36" rx="4"/><path d="M20 10h8M22 36h4M35 21h8m-4-4 4 4-4 4"/></svg><strong>{{ selected?.state === 'device' ? '设备已连接' : selected ? status(selected.state) : '等待连接' }}</strong><p>{{ selected?.state === 'unauthorized' ? '请在手机上允许此电脑进行 USB 调试' : '投屏功能尚未接入' }}</p></div>
+            <canvas ref="mirrorCanvas" class="phone-video" :class="{ visible: mirrorFrames > 0 }" :data-frames="mirrorFrames" aria-label="手机实时画面"></canvas>
+            <div v-if="mirrorFrames === 0" class="phone-placeholder"><svg viewBox="0 0 48 48" aria-hidden="true"><rect x="14" y="5" width="20" height="36" rx="4"/><path d="M20 10h8M22 36h4M35 21h8m-4-4 4 4-4 4"/></svg><strong>{{ mirrorState === 'connecting' || mirrorState === 'streaming' ? '正在连接画面' : selected?.state === 'device' ? '设备已连接' : selected ? status(selected.state) : '等待连接' }}</strong><p>{{ mirrorMessage }}</p><button v-if="selected?.state === 'device' && mirrorState === 'error'" class="quiet-button mirror-retry" @click="restartMirror">重新连接</button></div>
             <div class="phone-bottom"></div>
           </div>
         </div>
-        <div class="screen-caption"><span class="connection-dot" :class="{ online: selected?.state === 'device' }"></span>{{ selected ? status(selected.state) : '连接后显示设备状态' }}</div>
+        <div class="screen-caption"><span class="connection-dot" :class="{ online: mirrorState === 'live' }"></span>{{ mirrorState === 'live' ? '实时画面 · ' + mirrorSize : selected ? mirrorMessage : '连接后显示设备状态' }}</div>
       </section>
 
       <section class="inspector-pane">

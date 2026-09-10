@@ -15,7 +15,10 @@
     "smoke": "node scripts/smoke-desktop.mjs"
   },
   "engines": { "node": ">=22.12.0" },
-  "dependencies": { "vue": "3.5.42", "ws": "8.21.3" },
+  "dependencies": {
+    "@yume-chan/adb": "2.6.4", "@yume-chan/adb-scrcpy": "2.3.2", "@yume-chan/adb-server-node-tcp": "2.5.2",
+    "@yume-chan/scrcpy": "2.3.0", "@yume-chan/scrcpy-decoder-webcodecs": "2.5.3", "vue": "3.5.42", "ws": "8.21.3"
+  },
   "devDependencies": {
     "@types/node": "22.18.0",
     "@vitejs/plugin-vue": "6.0.8",
