@@ -52,7 +52,8 @@ test('本地 WebSocket 中继校验来源并双向传递 CDP 消息', async () =
   await new Promise((resolve) => upstreamServer.listen(0, '127.0.0.1', resolve));
   const address = upstreamServer.address();
   assert.ok(address && typeof address !== 'string');
-  const frontend = await startInspectorFrontend();
+  const relayStates = [];
+  const frontend = await startInspectorFrontend({ onRelayState: (state) => relayStates.push(state) });
   try {
     const relay = frontend.relay('ws://127.0.0.1:' + address.port + '/devtools/page/page-1');
     assert.ok(relay);
@@ -64,7 +65,12 @@ test('本地 WebSocket 中继校验来源并双向传递 CDP 消息', async () =
     client.send('{"id":1,"method":"Runtime.enable"}');
     const message = await new Promise((resolve) => client.once('message', (data) => resolve(data.toString())));
     assert.equal(message, '{"id":1,"method":"Runtime.enable"}');
-    client.close();
+    const upstream = [...upstreamSockets.clients][0];
+    upstream.close(1012, 'restart');
+    await new Promise((resolve) => client.once('close', resolve));
+    assert.equal(relayStates[0].state, 'open');
+    assert.equal(relayStates.at(-1).state, 'closed');
+    assert.equal(relayStates.at(-1).endpoint, 'ws://127.0.0.1:' + address.port + '/devtools/page/page-1');
   } finally {
     await frontend.close();
     await new Promise((resolve) => upstreamSockets.close(() => upstreamServer.close(resolve)));

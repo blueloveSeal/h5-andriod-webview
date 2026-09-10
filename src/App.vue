@@ -5,7 +5,7 @@ import { BitmapVideoFrameRenderer, WebCodecsVideoDecoder, WebGLVideoFrameRendere
 import type { Device } from '../electron/services/devices.mjs';
 import type { WebViewPage } from '../electron/services/webviews.mjs';
 import { AndroidNavigationKey, keyboardControl, limitMirrorText, mapMirrorPoint } from './mirror-input.mjs';
-import { choosePageTarget, uniqueScreenCandidate } from './page-follow.mjs';
+import { choosePageTarget, nextInspectorRetry, uniqueScreenCandidate } from './page-follow.mjs';
 
 const devices = ref<Device[]>([]);
 const selectedId = ref('');
@@ -47,6 +47,10 @@ let pendingPointerPoint: { x: number; y: number } | undefined;
 let pointerFrame = 0;
 let lastAutoInspectorTarget = '';
 let pendingManualTarget = '';
+let inspectorRetryTimer: ReturnType<typeof setTimeout> | undefined;
+let inspectorRetryTarget = '';
+let inspectorRetryAttempts = 0;
+let removeInspectorStateListener: (() => void) | undefined;
 
 interface MirrorMetadata {
   serial: string;
@@ -116,11 +120,55 @@ async function ensureAutoInspector() {
   if (!autoFollow.value || !candidate || candidate.id !== selectedPageId.value
     || inspectorOpen.value || inspectorLoading.value || lastAutoInspectorTarget === candidate.id) return;
   lastAutoInspectorTarget = candidate.id;
-  await openInspector();
+  const opened = await openInspector();
+  if (!opened && candidate.id === selectedPageId.value) scheduleInspectorRetry(candidate.id);
+}
+
+function resetInspectorRetry() {
+  clearTimeout(inspectorRetryTimer);
+  inspectorRetryTimer = undefined;
+  inspectorRetryTarget = '';
+  inspectorRetryAttempts = 0;
+}
+
+function scheduleInspectorRetry(targetId: string) {
+  const candidate = uniqueScreenCandidate(pages.value);
+  if (!autoFollow.value || !candidate || candidate.id !== targetId || selectedPageId.value !== targetId) return;
+  if (inspectorRetryTimer) {
+    inspectorError.value = 'DevTools 连接已断开，正在进行第 ' + inspectorRetryAttempts + '/3 次重连…';
+    return;
+  }
+  if (inspectorRetryTarget !== targetId) {
+    inspectorRetryTarget = targetId;
+    inspectorRetryAttempts = 0;
+  }
+  const retry = nextInspectorRetry(inspectorRetryAttempts);
+  if (!retry) {
+    inspectorError.value = 'DevTools 连续重连失败，请检查页面后手动重试。';
+    return;
+  }
+  inspectorRetryAttempts = retry.attempt;
+  inspectorError.value = 'DevTools 连接已断开，正在进行第 ' + retry.attempt + '/3 次重连…';
+  clearTimeout(inspectorRetryTimer);
+  inspectorRetryTimer = setTimeout(() => {
+    inspectorRetryTimer = undefined;
+    if (!autoFollow.value || selectedPageId.value !== targetId) return;
+    lastAutoInspectorTarget = '';
+    void ensureAutoInspector();
+  }, retry.delay);
+}
+
+function handleInspectorState(state: InspectorState) {
+  if (state.state !== 'disconnected' || state.targetId !== selectedPageId.value) return;
+  inspectorOpen.value = false;
+  inspectorLoading.value = false;
+  inspectorError.value = state.error;
+  if (autoFollow.value) scheduleInspectorRetry(state.targetId);
 }
 
 function selectPageManually(targetId: string) {
   autoFollow.value = false;
+  resetInspectorRetry();
   lastAutoInspectorTarget = '';
   if (selectedPageId.value === targetId) {
     if (!inspectorOpen.value && !inspectorLoading.value) void openInspector();
@@ -132,6 +180,7 @@ function selectPageManually(targetId: string) {
 
 function toggleAutoFollow() {
   autoFollow.value = !autoFollow.value;
+  resetInspectorRetry();
   pendingManualTarget = '';
   lastAutoInspectorTarget = '';
   if (!autoFollow.value) return;
@@ -377,14 +426,17 @@ function syncInspectorBounds() {
 }
 
 async function closeInspector(manual = false) {
-  if (manual) autoFollow.value = false;
+  if (manual) {
+    autoFollow.value = false;
+    resetInspectorRetry();
+  }
   inspectorOpen.value = false;
   inspectorLoading.value = false;
   await window.workbench?.inspector.close();
 }
 
 async function openInspector() {
-  if (!selectedPage.value || inspectorLoading.value || !window.workbench) return;
+  if (!selectedPage.value || inspectorLoading.value || !window.workbench) return false;
   inspectorLoading.value = true;
   inspectorError.value = '';
   await nextTick();
@@ -392,14 +444,17 @@ async function openInspector() {
   if (!rect) {
     inspectorError.value = '无法确定调试区域，请调整窗口后重试。';
     inspectorLoading.value = false;
-    return;
+    return false;
   }
   try {
     const result = await window.workbench.inspector.open(selectedPage.value.id, rect);
     inspectorOpen.value = result.ok;
     inspectorError.value = result.error || '';
+    if (result.ok) resetInspectorRetry();
+    return result.ok;
   } catch {
     inspectorError.value = 'DevTools 启动失败，请刷新页面后重试。';
+    return false;
   } finally {
     inspectorLoading.value = false;
   }
@@ -415,12 +470,14 @@ watch([selectedId, () => selected.value?.state], () => {
 });
 
 watch(selectedId, () => {
+  resetInspectorRetry();
   autoFollow.value = true;
   lastAutoInspectorTarget = '';
   pendingManualTarget = '';
 });
 
 watch(selectedPageId, async (value, previous) => {
+  if (value !== previous) resetInspectorRetry();
   if (value !== previous && inspectorOpen.value) await closeInspector();
   inspectorError.value = '';
   if (pendingManualTarget === value) {
@@ -437,6 +494,7 @@ async function chooseAdb() {
 
 onMounted(() => {
   window.addEventListener('message', acceptMirrorPort);
+  removeInspectorStateListener = window.workbench?.inspector.onState(handleInspectorState);
   void refresh();
   timer = setInterval(() => void refresh(), 3000);
   inspectorObserver = new ResizeObserver(syncInspectorBounds);
@@ -445,6 +503,8 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('message', acceptMirrorPort);
   mirrorRequest += 1;
+  resetInspectorRetry();
+  removeInspectorStateListener?.();
   clearInterval(timer);
   inspectorObserver?.disconnect();
   disposeLocalMirror();

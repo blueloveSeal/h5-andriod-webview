@@ -89,6 +89,16 @@ try {
       await page.waitForFunction((index) => document.querySelectorAll('.page-item')[index]?.getAttribute('aria-pressed') === 'true'
         && document.querySelector('.follow-toggle')?.getAttribute('aria-pressed') === 'false', manualIndex);
       await page.waitForFunction(() => Boolean(document.querySelector('.inspector-close')) || Boolean(document.querySelector('.inspector-error')?.textContent));
+      await desktop.evaluate(({ webContents }) => {
+        const contents = webContents.getAllWebContents().find((entry) => entry.getTitle() === 'DevTools' || /\/[0-9a-f]{40}\/inspector\.html(?:\?|$)/.test(entry.getURL()));
+        if (!contents) throw new Error('锁定目标的 DevTools 应已打开');
+        contents.forcefullyCrashRenderer();
+      });
+      await page.waitForFunction(() => document.querySelector('.inspector-error')?.textContent?.includes('已断开'));
+      await page.waitForTimeout(1500);
+      assert.equal(await desktop.evaluate(({ webContents }) => webContents.getAllWebContents()
+        .filter((entry) => entry.getTitle() === 'DevTools' || /\/[0-9a-f]{40}\/inspector\.html(?:\?|$)/.test(entry.getURL())).length), 0,
+      '锁定模式断线后不应自动重开 DevTools');
       await page.locator('.follow-toggle').click();
       await page.waitForFunction((index) => document.querySelectorAll('.page-item')[index]?.getAttribute('aria-pressed') === 'true'
         && document.querySelector('.follow-toggle')?.getAttribute('aria-pressed') === 'true', candidateIndex);
@@ -106,7 +116,7 @@ try {
         return { title: entry.getTitle(), location: url.origin + url.pathname };
       }) };
       const state = await contents.executeJavaScript('(() => { const contains = (root, text) => root.textContent?.includes(text) || [...root.querySelectorAll("*")].some((node) => node.shadowRoot && contains(node.shadowRoot, text)); return { title: document.title, ready: document.readyState, hasUi: document.body?.id === "-blink-dev-tools" && document.body.childElementCount > 0, hasElementsPanel: Boolean(document.querySelector(".panel.elements")), disconnected: contains(document, "Debugging connection was closed") }; })()');
-      return { ...state, url: contents.getURL(), chrome: process.versions.chrome };
+      return { ...state, id: contents.id, url: contents.getURL(), chrome: process.versions.chrome };
     });
     assert.ok(!('missing' in devtools), JSON.stringify(devtools));
     if (process.argv.includes('--screenshot')) {
@@ -121,7 +131,28 @@ try {
     assert.equal(devtools.hasElementsPanel, true, JSON.stringify(devtools));
     assert.equal(devtools.disconnected, false, JSON.stringify(devtools));
     assert.match(devtools.url, /^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f]{40}\/inspector\.html\?/);
-    console.log('WebView 真机验证通过：手机画面 ' + mirror.width + '×' + mirror.height + ' / ' + mirror.frames + ' 帧，触摸、拖动、键盘与文本控制写入 ' + controlWrites + ' 次，页面数量 ' + result.pages.length + '，屏幕内候选 ' + result.pages.filter((entry) => entry.candidate).length + '，内嵌 DevTools 已加载（Electron Chromium ' + devtools.chrome + '）。');
+    await desktop.evaluate(({ webContents }, id) => {
+      const contents = webContents.fromId(id);
+      if (!contents) throw new Error('自动跟随的 DevTools 应仍存在');
+      contents.forcefullyCrashRenderer();
+    }, devtools.id);
+    await page.waitForFunction(() => document.querySelector('.inspector-error')?.textContent?.includes('重连'));
+    await page.waitForFunction(() => Boolean(document.querySelector('.inspector-close'))
+      && !document.querySelector('.inspector-error')?.textContent, undefined, { timeout: 20000 });
+    await page.waitForTimeout(4000);
+    const recovered = await desktop.evaluate(async ({ webContents }, previousId) => {
+      const contents = webContents.getAllWebContents().find((entry) => entry.id !== previousId
+        && (entry.getTitle() === 'DevTools' || /\/[0-9a-f]{40}\/inspector\.html(?:\?|$)/.test(entry.getURL())));
+      if (!contents) return { missing: true };
+      const state = await contents.executeJavaScript('({ ready: document.readyState, hasUi: document.body?.id === "-blink-dev-tools" && document.body.childElementCount > 0, hasElementsPanel: Boolean(document.querySelector(".panel.elements")) })');
+      return { ...state, id: contents.id };
+    }, devtools.id);
+    assert.ok(!('missing' in recovered), JSON.stringify(recovered));
+    assert.notEqual(recovered.id, devtools.id);
+    assert.equal(recovered.ready, 'complete');
+    assert.equal(recovered.hasUi, true);
+    assert.equal(recovered.hasElementsPanel, true, JSON.stringify(recovered));
+    console.log('WebView 真机验证通过：手机画面 ' + mirror.width + '×' + mirror.height + ' / ' + mirror.frames + ' 帧，触摸、拖动、键盘与文本控制写入 ' + controlWrites + ' 次，页面数量 ' + result.pages.length + '，屏幕内候选 ' + result.pages.filter((entry) => entry.candidate).length + '，内嵌 DevTools 已加载并在断线后自动恢复（Electron Chromium ' + devtools.chrome + '）。');
   }
   if (process.argv.includes('--screenshot')) await page.screenshot({ path: path.join(artifactRoot, 'desktop.png') });
   console.log('桌面验证通过：窗口、受限 IPC、设备刷新、布局和进程隔离。设备数量：' + state.devices.length);

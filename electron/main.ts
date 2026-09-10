@@ -10,6 +10,7 @@ const directory = path.dirname(fileURLToPath(import.meta.url));
 let window: BrowserWindow | null = null;
 let inspectorView: WebContentsView | null = null;
 let inspectorTargetId = '';
+let inspectorEndpoint = '';
 let inspectorFrontend: Awaited<ReturnType<typeof startInspectorFrontend>> | null = null;
 let mirrorChannel: MirrorChannel | null = null;
 let mirrorToken = 0;
@@ -40,10 +41,22 @@ function trusted(event: Electron.IpcMainInvokeEvent) {
 
 function closeInspector() {
   if (!inspectorView) return;
-  window?.contentView.removeChildView(inspectorView);
-  inspectorView.webContents?.close({ waitForBeforeUnload: false });
+  const view = inspectorView;
   inspectorView = null;
   inspectorTargetId = '';
+  inspectorEndpoint = '';
+  window?.contentView.removeChildView(view);
+  view.webContents?.close({ waitForBeforeUnload: false });
+}
+
+function reportInspectorDisconnected(view: WebContentsView, targetId: string, endpoint: string) {
+  if (inspectorView !== view || inspectorTargetId !== targetId || inspectorEndpoint !== endpoint) return;
+  closeInspector();
+  window?.webContents.send('inspector:state', {
+    state: 'disconnected',
+    targetId,
+    error: 'DevTools 调试连接已断开。',
+  });
 }
 
 async function closeMirror(channel = mirrorChannel) {
@@ -123,7 +136,14 @@ async function waitForInspector(contents: Electron.WebContents, baseUrl: string,
 }
 
 async function createWindow() {
-  inspectorFrontend = await startInspectorFrontend({ fetcher: net.fetch });
+  inspectorFrontend = await startInspectorFrontend({
+    fetcher: net.fetch,
+    onRelayState: ({ endpoint, state }) => {
+      if (state === 'closed' && inspectorView && inspectorTargetId && endpoint === inspectorEndpoint) {
+        reportInspectorDisconnected(inspectorView, inspectorTargetId, endpoint);
+      }
+    },
+  });
   window = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -201,6 +221,8 @@ ipcMain.handle('inspector:open', async (event, targetId: unknown, boundsValue: u
   contents.on('will-navigate', (navigationEvent, url) => {
     if (!url.startsWith(frontendRoot)) navigationEvent.preventDefault();
   });
+  contents.on('render-process-gone', () => reportInspectorDisconnected(view, targetId, target.endpoint));
+  contents.on('destroyed', () => reportInspectorDisconnected(view, targetId, target.endpoint));
   if (process.env.WEBVIEW_TEST_DATA) {
     contents.on('console-message', (details) => {
       console.error('[inspector-console] ' + details.level + ':' + details.message.slice(0, 500));
@@ -216,6 +238,7 @@ ipcMain.handle('inspector:open', async (event, targetId: unknown, boundsValue: u
   window.contentView.addChildView(view);
   inspectorView = view;
   inspectorTargetId = targetId;
+  inspectorEndpoint = target.endpoint;
   try {
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([

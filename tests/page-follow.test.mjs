@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { choosePageTarget, uniqueScreenCandidate } from '../src/page-follow.mjs';
+import { choosePageTarget, nextInspectorRetry, uniqueScreenCandidate } from '../src/page-follow.mjs';
 
 const pages = [
   { id: 'background', candidate: false },
@@ -26,4 +26,11 @@ test('目标销毁后选择现有候选或首个页面', () => {
   assert.equal(choosePageTarget(pages, 'gone', true), 'current');
   assert.equal(choosePageTarget([{ id: 'fallback', candidate: false }], 'gone', true), 'fallback');
   assert.equal(choosePageTarget([], 'gone', true), '');
+});
+
+test('DevTools 自动重连最多三次并采用有上限退避', () => {
+  assert.deepEqual(nextInspectorRetry(0), { attempt: 1, delay: 1000 });
+  assert.deepEqual(nextInspectorRetry(1), { attempt: 2, delay: 2000 });
+  assert.deepEqual(nextInspectorRetry(2), { attempt: 3, delay: 4000 });
+  assert.equal(nextInspectorRetry(3), null);
 });

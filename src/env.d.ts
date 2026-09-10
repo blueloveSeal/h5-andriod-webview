@@ -4,6 +4,12 @@ import type { PageList } from '../electron/services/webviews.mjs';
 export {};
 
 declare global {
+  interface InspectorState {
+    state: 'disconnected';
+    targetId: string;
+    error: string;
+  }
+
   interface Window {
     workbench?: {
       devices(): Promise<DeviceList>;
@@ -17,6 +23,7 @@ declare global {
         open(targetId: string, bounds: DOMRectLike): Promise<{ ok: boolean; error: string | null }>;
         bounds(bounds: DOMRectLike): Promise<boolean>;
         close(): Promise<void>;
+        onState(callback: (state: InspectorState) => void): () => void;
       };
     };
   }

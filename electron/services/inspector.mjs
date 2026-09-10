@@ -23,8 +23,8 @@ export function inspectorUrl(endpoint, frontendEntry) {
   return frontend.toString();
 }
 
-/** @param {{ fetcher?: (input: string, init?: RequestInit) => Promise<Response> }} [options] */
-export async function startInspectorFrontend({ fetcher = fetch } = {}) {
+/** @param {{ fetcher?: (input: string, init?: RequestInit) => Promise<Response>, onRelayState?: (state: { endpoint: string, state: string, reason: string }) => void }} [options] */
+export async function startInspectorFrontend({ fetcher = fetch, onRelayState = () => {} } = {}) {
   const revisions = new Set();
   const targets = new Map();
   const clients = new Set();
@@ -35,6 +35,12 @@ export async function startInspectorFrontend({ fetcher = fetch } = {}) {
     const upstream = new WebSocket(endpoint, { perMessageDeflate: false, maxPayload: 128 * 1024 * 1024 });
     const pending = [];
     let pendingSize = 0;
+    let ended = false;
+    const relayState = (state, reason) => {
+      if (state === 'closed' && ended) return;
+      if (state === 'closed') ended = true;
+      try { onRelayState({ endpoint, state, reason }); } catch {}
+    };
     clients.add(downstream);
     clients.add(upstream);
     downstream.on('message', (data, isBinary) => {
@@ -46,6 +52,7 @@ export async function startInspectorFrontend({ fetcher = fetch } = {}) {
       }
     });
     upstream.on('open', () => {
+      relayState('open', 'connected');
       for (const [data, isBinary] of pending) upstream.send(data, { binary: isBinary });
       pending.length = 0;
     });
@@ -54,16 +61,24 @@ export async function startInspectorFrontend({ fetcher = fetch } = {}) {
     });
     downstream.on('close', () => {
       clients.delete(downstream);
+      relayState('closed', 'downstream-closed');
       if (upstream.readyState === WebSocket.OPEN) upstream.close();
       else if (upstream.readyState === WebSocket.CONNECTING) upstream.terminate();
     });
     upstream.on('close', () => {
       clients.delete(upstream);
+      relayState('closed', 'upstream-closed');
       if (downstream.readyState === WebSocket.OPEN) downstream.close();
       else if (downstream.readyState === WebSocket.CONNECTING) downstream.terminate();
     });
-    downstream.on('error', () => upstream.terminate());
-    upstream.on('error', () => downstream.close(1011, 'CDP connection failed'));
+    downstream.on('error', () => {
+      relayState('closed', 'downstream-error');
+      upstream.terminate();
+    });
+    upstream.on('error', () => {
+      relayState('closed', 'upstream-error');
+      downstream.close(1011, 'CDP connection failed');
+    });
   }
 
   const server = http.createServer(async (request, response) => {

@@ -19,5 +19,10 @@ contextBridge.exposeInMainWorld('workbench', {
     bounds: (bounds: { x: number, y: number, width: number, height: number }) =>
       ipcRenderer.invoke('inspector:bounds', bounds),
     close: () => ipcRenderer.invoke('inspector:close'),
+    onState: (callback: (state: unknown) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, state: unknown) => callback(state);
+      ipcRenderer.on('inspector:state', listener);
+      return () => ipcRenderer.removeListener('inspector:state', listener);
+    },
   },
 });
