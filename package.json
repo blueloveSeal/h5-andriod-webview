@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "description": "Android WebView USB 调试工作台",
+  "productName": "WebView 工作台",
+  "author": "blueloveSeal",
   "license": "MIT",
   "type": "module",
   "main": "dist-electron/main.js",
@@ -12,7 +14,10 @@
     "start": "electron .",
     "test": "node --test tests/*.test.mjs",
     "doctor": "node scripts/doctor.mjs",
-    "smoke": "node scripts/smoke-desktop.mjs"
+    "smoke": "node scripts/smoke-desktop.mjs",
+    "smoke:pack": "node scripts/smoke-desktop.mjs --webview --executable=release/win-unpacked/WebView-Workbench.exe",
+    "pack:win": "npm run build && electron-builder --win dir --x64",
+    "dist:win": "npm run build && electron-builder --win nsis --x64"
   },
   "engines": { "node": ">=22.12.0" },
   "dependencies": {
@@ -23,10 +28,63 @@
     "@types/node": "22.18.0",
     "@vitejs/plugin-vue": "6.0.8",
     "electron": "44.3.0",
+    "electron-builder": "26.15.7",
     "playwright": "1.63.0",
     "typescript": "6.0.3",
     "vite": "8.2.2",
     "vite-plugin-electron": "1.1.2",
     "vue-tsc": "3.3.11"
+  },
+  "build": {
+    "appId": "dev.blueloveseal.webview-workbench",
+    "productName": "WebView 工作台",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "vendor/scrcpy/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "vendor/scrcpy/scrcpy-server-v3.3.4"
+    ],
+    "extraResources": [
+      {
+        "from": "LICENSE",
+        "to": "licenses/PROJECT-LICENSE.txt"
+      },
+      {
+        "from": "vendor/scrcpy/LICENSE",
+        "to": "licenses/SCRCPY-LICENSE.txt"
+      },
+      {
+        "from": "vendor/scrcpy/NOTICE.txt",
+        "to": "licenses/SCRCPY-NOTICE.txt"
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "executableName": "WebView-Workbench",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "WebView 工作台",
+      "license": "LICENSE",
+      "artifactName": "WebView-Workbench-${version}-${arch}-Setup.${ext}"
+    }
   }
 }

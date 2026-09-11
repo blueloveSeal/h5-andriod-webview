@@ -53,10 +53,13 @@ const launchEnv = { ...process.env, WEBVIEW_TEST_DATA: profile };
 delete launchEnv.ELECTRON_RUN_AS_NODE;
 let desktop;
 const verifyWebview = process.argv.includes('--webview');
+const executableArgument = process.argv.find((argument) => argument.startsWith('--executable='));
+const executablePath = executableArgument ? path.resolve(executableArgument.slice('--executable='.length)) : undefined;
+if (executableArgument && !executableArgument.slice('--executable='.length)) throw new Error('--executable 需要有效路径');
 const adb = process.env.WEBVIEW_ADB_PATH || 'adb';
 const forwardsBefore = verifyWebview ? await executeAdb(adb, ['forward', '--list']) : '';
 try {
-  desktop = await electron.launch({ args: ['.'], env: launchEnv, timeout: 30000 });
+  desktop = await electron.launch(executablePath ? { executablePath, env: launchEnv, timeout: 30000 } : { args: ['.'], env: launchEnv, timeout: 30000 });
   if (verifyWebview) desktop.process().stderr?.on('data', (chunk) => process.stderr.write(chunk));
   const page = await desktop.firstWindow();
   await page.getByRole('heading', { name: '设备', exact: true }).waitFor();
