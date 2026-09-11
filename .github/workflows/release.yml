@@ -1,0 +1,48 @@
+name: Windows release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Verify tag version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $packageVersion = (Get-Content -LiteralPath 'package.json' -Raw | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_NAME -ne "v$packageVersion") {
+            throw "Tag $env:GITHUB_REF_NAME does not match package version $packageVersion"
+          }
+      - run: npm ci
+      - run: npm test
+      - run: npm run dist:win
+      - uses: actions/upload-artifact@v6
+        with:
+          name: WebView-Workbench-Windows-x64
+          if-no-files-found: error
+          path: |
+            release/WebView-Workbench-*-x64-Setup.exe
+            release/WebView-Workbench-*-x64-Setup.exe.blockmap
+            release/latest.yml
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releaseFiles = Get-ChildItem -Path 'release/WebView-Workbench-*-x64-Setup.exe', 'release/WebView-Workbench-*-x64-Setup.exe.blockmap', 'release/latest.yml'
+          gh release create $env:GITHUB_REF_NAME $releaseFiles.FullName --verify-tag --generate-notes --title $env:GITHUB_REF_NAME
