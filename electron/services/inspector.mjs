@@ -23,6 +23,24 @@ export function inspectorUrl(endpoint, frontendEntry) {
   return frontend.toString();
 }
 
+const diagnosticValue = (value, limit = 2048) => typeof value === 'string'
+  ? value.replace(/[\x00-\x1f\x7f]+/g, ' ').trim().slice(0, limit) || '未知'
+  : '未知';
+
+export function inspectorDiagnostics(target, electronChrome) {
+  return [
+    'WebView 工作台兼容诊断',
+    'APP：' + diagnosticValue(target?.packageName, 256),
+    '页面：' + diagnosticValue(target?.title, 512),
+    'URL：' + diagnosticValue(target?.url),
+    'WebView：' + diagnosticValue(target?.browser, 128),
+    'CDP：' + diagnosticValue(target?.protocolVersion, 32),
+    'WebKit：' + diagnosticValue(target?.webkitVersion, 128),
+    'DevTools 前端修订：' + diagnosticValue(target?.frontendRevision, 40),
+    '桌面 Chromium：' + diagnosticValue(electronChrome, 64),
+  ].join('\n');
+}
+
 /** @param {{ fetcher?: (input: string, init?: RequestInit) => Promise<Response>, onRelayState?: (state: { endpoint: string, state: string, reason: string }) => void }} [options] */
 export async function startInspectorFrontend({ fetcher = fetch, onRelayState = () => {} } = {}) {
   const revisions = new Set();

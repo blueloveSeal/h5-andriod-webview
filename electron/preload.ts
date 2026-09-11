@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('workbench', {
     bounds: (bounds: { x: number, y: number, width: number, height: number }) =>
       ipcRenderer.invoke('inspector:bounds', bounds),
     close: () => ipcRenderer.invoke('inspector:close'),
+    copyDiagnostics: (targetId: string) => ipcRenderer.invoke('inspector:copy-diagnostics', targetId),
     onState: (callback: (state: unknown) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, state: unknown) => callback(state);
       ipcRenderer.on('inspector:state', listener);

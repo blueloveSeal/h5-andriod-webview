@@ -21,6 +21,7 @@ const inspectorHost = ref<HTMLElement>();
 const inspectorOpen = ref(false);
 const inspectorLoading = ref(false);
 const inspectorError = ref('');
+const diagnosticsCopied = ref(false);
 const autoFollow = ref(true);
 const mirrorCanvas = ref<HTMLCanvasElement>();
 const mirrorState = ref<'idle' | 'connecting' | 'streaming' | 'live' | 'error'>('idle');
@@ -32,6 +33,12 @@ const mirrorControlError = ref('');
 const mirrorText = ref('');
 const selected = computed(() => devices.value.find((device) => device.serial === selectedId.value));
 const connected = computed(() => devices.value.filter((device) => device.state === 'device').length);
+const inspectorVersion = computed(() => {
+  const page = selectedPage.value;
+  if (!page) return '';
+  return [page.browser || 'WebView 版本未知', page.protocolVersion ? 'CDP ' + page.protocolVersion : 'CDP 未知',
+    page.frontendRevision ? '前端 ' + page.frontendRevision.slice(0, 8) : '前端未知'].join(' · ');
+});
 let timer: ReturnType<typeof setInterval> | undefined;
 let inspectorObserver: ResizeObserver | undefined;
 let mirrorPort: MessagePort | undefined;
@@ -51,6 +58,7 @@ let inspectorRetryTimer: ReturnType<typeof setTimeout> | undefined;
 let inspectorRetryTarget = '';
 let inspectorRetryAttempts = 0;
 let removeInspectorStateListener: (() => void) | undefined;
+let diagnosticsCopiedTimer: ReturnType<typeof setTimeout> | undefined;
 
 interface MirrorMetadata {
   serial: string;
@@ -164,6 +172,22 @@ function handleInspectorState(state: InspectorState) {
   inspectorLoading.value = false;
   inspectorError.value = state.error;
   if (autoFollow.value) scheduleInspectorRetry(state.targetId);
+}
+
+async function copyInspectorDiagnostics() {
+  if (!selectedPage.value || !window.workbench) return;
+  try {
+    const result = await window.workbench.inspector.copyDiagnostics(selectedPage.value.id);
+    if (!result.ok) {
+      inspectorError.value = result.error || '复制诊断失败，请刷新页面后重试。';
+      return;
+    }
+    diagnosticsCopied.value = true;
+    clearTimeout(diagnosticsCopiedTimer);
+    diagnosticsCopiedTimer = setTimeout(() => { diagnosticsCopied.value = false; }, 1600);
+  } catch {
+    inspectorError.value = '复制诊断失败，请刷新页面后重试。';
+  }
 }
 
 function selectPageManually(targetId: string) {
@@ -477,6 +501,8 @@ watch(selectedId, () => {
 });
 
 watch(selectedPageId, async (value, previous) => {
+  diagnosticsCopied.value = false;
+  clearTimeout(diagnosticsCopiedTimer);
   if (value !== previous) resetInspectorRetry();
   if (value !== previous && inspectorOpen.value) await closeInspector();
   inspectorError.value = '';
@@ -505,6 +531,7 @@ onUnmounted(() => {
   mirrorRequest += 1;
   resetInspectorRetry();
   removeInspectorStateListener?.();
+  clearTimeout(diagnosticsCopiedTimer);
   clearInterval(timer);
   inspectorObserver?.disconnect();
   disposeLocalMirror();
@@ -572,9 +599,12 @@ onUnmounted(() => {
 
       <section class="inspector-pane">
         <div class="pane-heading">
-          <span>WebView 调试</span>
-          <button v-if="inspectorOpen" class="quiet-button inspector-close" @click="closeInspector(true)">关闭面板</button>
-          <span v-else class="mono subtle">DEVTOOLS</span>
+          <div class="inspector-heading-main"><span>WebView 调试</span><span v-if="selectedPage" class="mono inspector-version" :title="inspectorVersion">{{ inspectorVersion }}</span></div>
+          <div class="inspector-heading-actions">
+            <button v-if="selectedPage" class="quiet-button diagnostics-button" @click="copyInspectorDiagnostics">{{ diagnosticsCopied ? '已复制' : '复制诊断' }}</button>
+            <button v-if="inspectorOpen" class="quiet-button inspector-close" @click="closeInspector(true)">关闭面板</button>
+            <span v-else class="mono subtle">DEVTOOLS</span>
+          </div>
         </div>
         <div ref="inspectorHost" class="inspector-surface">
         <div v-if="!inspectorOpen" class="inspector-empty">

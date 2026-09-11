@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { WebViewDiscovery, foregroundPackage, frontendEntry, pageGeometry, socketNames, screenSize, readJson } from '../electron/services/webviews.mjs';
+import { WebViewDiscovery, foregroundPackage, frontendEntry, frontendRevision, pageGeometry, socketNames, screenSize, readJson } from '../electron/services/webviews.mjs';
 
 test('调试 socket 去重并拒绝非 WebView 名称', () => {
   assert.deepEqual(socketNames('@webview_devtools_remote_12\n@webview_devtools_remote_12\n@chrome_devtools_remote\n@webview_devtools_remote_BAD'), ['webview_devtools_remote_12']);
@@ -31,6 +31,8 @@ test('只接受 Chrome 官方且带固定修订号的远程前端', () => {
   assert.equal(frontendEntry('http://chrome-devtools-frontend.appspot.com/serve_rev/@be2c1f4fd451578a9ada68a0ac12d659362b44bf/inspector.html'), null);
   assert.equal(frontendEntry('https://example.com/serve_rev/@be2c1f4fd451578a9ada68a0ac12d659362b44bf/inspector.html'), null);
   assert.equal(frontendEntry('https://chrome-devtools-frontend.appspot.com/serve_rev/latest/inspector.html'), null);
+  assert.equal(frontendRevision(valid), 'be2c1f4fd451578a9ada68a0ac12d659362b44bf');
+  assert.equal(frontendRevision('https://example.com/serve_rev/@be2c1f4fd451578a9ada68a0ac12d659362b44bf/inspector.html'), '');
 });
 
 function fixture() {
@@ -56,7 +58,7 @@ function fixture() {
     },
     json: async (_port, route) => {
       if (jsonFail) throw new Error('busy');
-      return route.endsWith('version') ? { 'Android-Package': 'org.example.app', Browser: 'Chrome/143' } : [
+      return route.endsWith('version') ? { 'Android-Package': 'org.example.app', Browser: 'Chrome/143', 'Protocol-Version': '1.3', 'WebKit-Version': '537.36 (@be2c1f4fd451578a9ada68a0ac12d659362b44bf)' } : [
         { id: 'page-1', type: 'page', title: 'Example', url: 'https://example.com', webSocketDebuggerUrl: 'ws://untrusted.example/devtools/page/page-1', devtoolsFrontendUrl: 'https://chrome-devtools-frontend.appspot.com/serve_rev/@be2c1f4fd451578a9ada68a0ac12d659362b44bf/inspector.html?ws=ignored', description: '{"visible":true,"attached":true,"width":1280,"height":2400,"screenX":0,"screenY":100}' },
         { id: 'bad', type: 'page', webSocketDebuggerUrl: 'wss://example.com/anything' },
       ];
@@ -70,6 +72,8 @@ test('只使用自建 localhost 转发，保留稳定目标标识并复用端口
   const first = await discovery.scan('phone-a');
   assert.equal(first.pages.length, 1);
   assert.equal(first.pages[0].packageName, 'org.example.app');
+  assert.equal(first.pages[0].protocolVersion, '1.3');
+  assert.equal(first.pages[0].frontendRevision, 'be2c1f4fd451578a9ada68a0ac12d659362b44bf');
   assert.equal(first.pages[0].candidate, true);
   assert.equal(discovery.target(first.pages[0].id).endpoint, 'ws://127.0.0.1:43210/devtools/page/page-1');
   assert.match(discovery.target(first.pages[0].id).frontend, /^https:\/\/chrome-devtools-frontend\.appspot\.com\/serve_rev\/@/);

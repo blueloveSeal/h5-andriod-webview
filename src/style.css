@@ -65,6 +65,11 @@ h1 { font-size: 12px; margin: 0; font-weight: 600; letter-spacing: 2px; }
 .eyebrow { font-size: 10px; letter-spacing: 2px; color: #738d7c; }
 .sidebar-note p { font-size: 10px; line-height: 1.9; color: #6f8175; margin: 10px 0 0; }
 .pane-heading { height: 53px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; padding: 0 19px; font-size: 11px; flex-shrink: 0; gap: 15px; }
+.inspector-heading-main, .inspector-heading-actions { display: flex; align-items: center; min-width: 0; gap: 10px; }
+.inspector-heading-main { flex: 1; }
+.inspector-heading-actions { flex-shrink: 0; }
+.inspector-version { min-width: 0; color: #74837a; font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diagnostics-button { padding: 5px 9px; color: #98ad9e; }
 .subtle { color: #74837a; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .screen-pane { display: flex; flex-direction: column; border-right: 1px solid var(--line); background: #111713; min-height: 0; }
 .phone-stage { display: flex; flex: 1; min-height: 0; justify-content: center; align-items: center; padding: 24px; }
@@ -91,7 +96,7 @@ h1 { font-size: 12px; margin: 0; font-weight: 600; letter-spacing: 2px; }
 .screen-caption { display: flex; gap: 8px; align-items: center; justify-content: center; padding: 0 15px 24px; color: #718879; font-size: 10px; }
 .inspector-pane { display: flex; flex-direction: column; min-height: 0; background: #101512; }
 .inspector-surface { display: flex; flex: 1; min-height: 0; position: relative; }
-.inspector-close { margin-left: auto; padding: 5px 10px; }
+.inspector-close { padding: 5px 10px; }
 .inspector-empty { margin: auto; text-align: center; padding: 30px; animation: enter .3s ease both; }
 .inspect-symbol { display: flex; align-items: center; justify-content: center; margin: 0 auto 30px; width: 80px; height: 80px; border: 1px solid #35453a; border-radius: 20px; background: #19231c; transform: rotate(-4deg); }
 .inspect-symbol svg { width: 46px; stroke: #90c9a4; fill: none; stroke-width: 1.5; transform: rotate(4deg); }

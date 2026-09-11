@@ -4,6 +4,27 @@ import path from 'node:path';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { executeAdb } from '../electron/services/webviews.mjs';
 
+async function showDevToolsPanel(desktop, command, panel) {
+  return desktop.evaluate(async ({ webContents }, request) => {
+    const contents = webContents.getAllWebContents().find((entry) => entry.getTitle() === 'DevTools' || /\/[0-9a-f]{40}\/inspector\.html(?:\?|$)/.test(entry.getURL()));
+    if (!contents) return false;
+    contents.sendInputEvent({ type: 'keyDown', keyCode: 'P', modifiers: ['control', 'shift'] });
+    contents.sendInputEvent({ type: 'keyUp', keyCode: 'P', modifiers: ['control', 'shift'] });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    contents.insertText(request.command);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    contents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+    contents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
+    const expression = '(panel => Boolean(UI.panels[panel]) && [...document.querySelectorAll(".panel")].some((node) => node.classList.contains(panel) && node.offsetParent !== null))(' + JSON.stringify(request.panel) + ')';
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      if (await contents.executeJavaScript(expression).catch(() => false)) return true;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return false;
+  }, { command, panel });
+}
+
 // 验证实际构建产物；设备数据来自本机 ADB，不使用展示用假数据。
 const artifactRoot = path.resolve('output/playwright');
 const profile = path.join(artifactRoot, 'smoke-profile');
@@ -78,9 +99,15 @@ try {
     assert.equal(await page.locator('.page-item').count(), result.pages.length);
     const candidateIndex = result.pages.findIndex((entry) => entry.candidate);
     assert.ok(candidateIndex >= 0, '需要唯一屏幕内候选页面');
+    const candidate = result.pages[candidateIndex];
+    assert.match(candidate.browser, /^Chrome\/\d+/);
+    assert.match(candidate.protocolVersion, /^\d+\.\d+$/);
+    assert.match(candidate.frontendRevision, /^[0-9a-f]{40}$/);
     const candidatePage = page.locator('.page-item').nth(candidateIndex);
     await page.waitForFunction((index) => document.querySelectorAll('.page-item')[index]?.getAttribute('aria-pressed') === 'true', candidateIndex);
     assert.equal(await page.locator('.follow-toggle').getAttribute('aria-pressed'), 'true');
+    assert.ok((await page.locator('.inspector-version').textContent())?.includes(candidate.browser));
+    await page.locator('.diagnostics-button').waitFor();
     await page.waitForFunction(() => Boolean(document.querySelector('.inspector-close')) || Boolean(document.querySelector('.inspector-error')?.textContent));
     const manualIndex = result.pages.findIndex((entry) => !entry.candidate);
     if (manualIndex >= 0) {
@@ -131,6 +158,13 @@ try {
     assert.equal(devtools.hasElementsPanel, true, JSON.stringify(devtools));
     assert.equal(devtools.disconnected, false, JSON.stringify(devtools));
     assert.match(devtools.url, /^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f]{40}\/inspector\.html\?/);
+    const corePanels = [
+      ['console', 'console'], ['sources', 'sources'], ['network', 'network'],
+      ['show application', 'resources'], ['show performance', 'timeline'], ['show memory', 'heap-profiler'],
+    ];
+    for (const [command, panel] of corePanels) {
+      assert.equal(await showDevToolsPanel(desktop, command, panel), true, 'DevTools 面板无法加载：' + panel);
+    }
     await desktop.evaluate(({ webContents }, id) => {
       const contents = webContents.fromId(id);
       if (!contents) throw new Error('自动跟随的 DevTools 应仍存在');
@@ -152,7 +186,7 @@ try {
     assert.equal(recovered.ready, 'complete');
     assert.equal(recovered.hasUi, true);
     assert.equal(recovered.hasElementsPanel, true, JSON.stringify(recovered));
-    console.log('WebView 真机验证通过：手机画面 ' + mirror.width + '×' + mirror.height + ' / ' + mirror.frames + ' 帧，触摸、拖动、键盘与文本控制写入 ' + controlWrites + ' 次，页面数量 ' + result.pages.length + '，屏幕内候选 ' + result.pages.filter((entry) => entry.candidate).length + '，内嵌 DevTools 已加载并在断线后自动恢复（Electron Chromium ' + devtools.chrome + '）。');
+    console.log('WebView 真机验证通过：手机画面 ' + mirror.width + '×' + mirror.height + ' / ' + mirror.frames + ' 帧，触摸、拖动、键盘与文本控制写入 ' + controlWrites + ' 次，页面数量 ' + result.pages.length + '，屏幕内候选 ' + result.pages.filter((entry) => entry.candidate).length + '，7 个核心 DevTools 面板已加载并在断线后自动恢复（Electron Chromium ' + devtools.chrome + '）。');
   }
   if (process.argv.includes('--screenshot')) await page.screenshot({ path: path.join(artifactRoot, 'desktop.png') });
   console.log('桌面验证通过：窗口、受限 IPC、设备刷新、布局和进程隔离。设备数量：' + state.devices.length);

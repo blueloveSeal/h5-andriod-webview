@@ -4,7 +4,7 @@ import http from 'node:http';
 
 const execute = promisify(execFile);
 
-/** @typedef {{ id: string, title: string, url: string, packageName: string, browser: string, visible: boolean, candidate: boolean, width: number, height: number }} WebViewPage */
+/** @typedef {{ id: string, title: string, url: string, packageName: string, browser: string, protocolVersion: string, webkitVersion: string, frontendRevision: string, visible: boolean, candidate: boolean, width: number, height: number }} WebViewPage */
 /** @typedef {{ pages: WebViewPage[], error: string | null }} PageList */
 
 // 参数始终作为数组传入；转发只绑定 ADB 分配的本机端口。
@@ -83,6 +83,11 @@ export function frontendEntry(value) {
   } catch {
     return null;
   }
+}
+
+export function frontendRevision(value) {
+  const entry = frontendEntry(value);
+  return entry?.match(/\/serve_rev\/@([0-9a-f]{40})\//)?.[1] || '';
 }
 
 const text = (value, limit = 4096) => typeof value === 'string' ? value.slice(0, limit) : '';
@@ -182,7 +187,9 @@ export class WebViewDiscovery {
           const geometry = pageGeometry(target.description, screen);
           const page = {
             id, title: text(target.title, 512) || '未命名页面', url: text(target.url), packageName,
-            browser: text(version?.Browser, 128), ...geometry,
+            browser: text(version?.Browser, 128), protocolVersion: text(version?.['Protocol-Version'], 32),
+            webkitVersion: text(version?.['WebKit-Version'], 128),
+            frontendRevision: frontendRevision(target.devtoolsFrontendUrl), ...geometry,
             candidate: geometry.candidate && packageName === foreground,
           };
           pages.push(page);

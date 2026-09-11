@@ -23,6 +23,7 @@ declare global {
         open(targetId: string, bounds: DOMRectLike): Promise<{ ok: boolean; error: string | null }>;
         bounds(bounds: DOMRectLike): Promise<boolean>;
         close(): Promise<void>;
+        copyDiagnostics(targetId: string): Promise<{ ok: boolean; error: string | null }>;
         onState(callback: (state: InspectorState) => void): () => void;
       };
     };

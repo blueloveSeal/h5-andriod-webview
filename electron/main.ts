@@ -1,9 +1,9 @@
-import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, net, WebContentsView } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, MessageChannelMain, net, WebContentsView } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listDevices } from './services/devices.mjs';
 import { WebViewDiscovery } from './services/webviews.mjs';
-import { inspectorBounds, inspectorUrl, startInspectorFrontend } from './services/inspector.mjs';
+import { inspectorBounds, inspectorDiagnostics, inspectorUrl, startInspectorFrontend } from './services/inspector.mjs';
 import { SCRCPY_SERVER_FILENAME, startDeviceMirror } from './services/mirror.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -281,6 +281,15 @@ ipcMain.handle('inspector:bounds', (event, boundsValue: unknown) => {
 ipcMain.handle('inspector:close', (event) => {
   trusted(event);
   closeInspector();
+});
+
+ipcMain.handle('inspector:copy-diagnostics', (event, targetId: unknown) => {
+  trusted(event);
+  if (typeof targetId !== 'string') return { ok: false, error: '调试页面参数无效。' };
+  const target = discovery.target(targetId);
+  if (!target) return { ok: false, error: '页面已失效，请刷新后重试。' };
+  clipboard.writeText(inspectorDiagnostics(target, process.versions.chrome));
+  return { ok: true, error: null };
 });
 
 ipcMain.handle('mirror:start', async (event, serial: unknown) => {

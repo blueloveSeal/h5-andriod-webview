@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import WebSocket, { WebSocketServer } from 'ws';
-import { inspectorBounds, inspectorUrl, startInspectorFrontend } from '../electron/services/inspector.mjs';
+import { inspectorBounds, inspectorDiagnostics, inspectorUrl, startInspectorFrontend } from '../electron/services/inspector.mjs';
 
 test('DevTools 只接受自有 localhost 页面端点', () => {
   const entry = 'http://127.0.0.1:52100/be2c1f4fd451578a9ada68a0ac12d659362b44bf/inspector.html';
@@ -14,6 +14,19 @@ test('DevTools 只接受自有 localhost 页面端点', () => {
   assert.throws(() => inspectorUrl('ws://127.0.0.1:43210/devtools/browser/root', entry));
   assert.throws(() => inspectorUrl('ws://127.0.0.1:43210/cdp/' + 'a'.repeat(64) + '?token=x', entry));
   assert.throws(() => inspectorUrl('ws://127.0.0.1:43210/cdp/' + 'a'.repeat(64), 'https://example.com/inspector.html'));
+});
+
+test('兼容诊断包含版本信息且不会泄露本机调试端点', () => {
+  const diagnostics = inspectorDiagnostics({
+    packageName: 'org.example.app', title: '页面\n标题', url: 'https://example.com/path', browser: 'Chrome/143',
+    protocolVersion: '1.3', webkitVersion: '537.36', frontendRevision: 'a'.repeat(40),
+    endpoint: 'ws://127.0.0.1:43210/devtools/page/private',
+  }, '152.0.7977.78');
+  assert.match(diagnostics, /APP：org\.example\.app/);
+  assert.match(diagnostics, /页面：页面 标题/);
+  assert.match(diagnostics, /CDP：1\.3/);
+  assert.match(diagnostics, /DevTools 前端修订：a{40}/);
+  assert.doesNotMatch(diagnostics, /127\.0\.0\.1|private/);
 });
 
 test('前端代理剥离本机查询参数并只请求已登记的官方修订', async () => {
