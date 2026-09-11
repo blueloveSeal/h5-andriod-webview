@@ -59,6 +59,7 @@ let inspectorRetryTarget = '';
 let inspectorRetryAttempts = 0;
 let removeInspectorStateListener: (() => void) | undefined;
 let diagnosticsCopiedTimer: ReturnType<typeof setTimeout> | undefined;
+let inspectorRequest = 0;
 
 interface MirrorMetadata {
   serial: string;
@@ -450,6 +451,7 @@ function syncInspectorBounds() {
 }
 
 async function closeInspector(manual = false) {
+  inspectorRequest += 1;
   if (manual) {
     autoFollow.value = false;
     resetInspectorRetry();
@@ -461,26 +463,31 @@ async function closeInspector(manual = false) {
 
 async function openInspector() {
   if (!selectedPage.value || inspectorLoading.value || !window.workbench) return false;
+  const page = selectedPage.value;
+  const request = ++inspectorRequest;
   inspectorLoading.value = true;
   inspectorError.value = '';
   await nextTick();
   const rect = inspectorRect();
   if (!rect) {
-    inspectorError.value = '无法确定调试区域，请调整窗口后重试。';
-    inspectorLoading.value = false;
+    if (request === inspectorRequest) {
+      inspectorError.value = '无法确定调试区域，请调整窗口后重试。';
+      inspectorLoading.value = false;
+    }
     return false;
   }
   try {
-    const result = await window.workbench.inspector.open(selectedPage.value.id, rect);
+    const result = await window.workbench.inspector.open(page.id, rect);
+    if (request !== inspectorRequest || page.id !== selectedPageId.value) return false;
     inspectorOpen.value = result.ok;
     inspectorError.value = result.error || '';
     if (result.ok) resetInspectorRetry();
     return result.ok;
   } catch {
-    inspectorError.value = 'DevTools 启动失败，请刷新页面后重试。';
+    if (request === inspectorRequest) inspectorError.value = 'DevTools 启动失败，请刷新页面后重试。';
     return false;
   } finally {
-    inspectorLoading.value = false;
+    if (request === inspectorRequest) inspectorLoading.value = false;
   }
 }
 
@@ -504,7 +511,7 @@ watch(selectedPageId, async (value, previous) => {
   diagnosticsCopied.value = false;
   clearTimeout(diagnosticsCopiedTimer);
   if (value !== previous) resetInspectorRetry();
-  if (value !== previous && inspectorOpen.value) await closeInspector();
+  if (value !== previous && (inspectorOpen.value || inspectorLoading.value)) await closeInspector();
   inspectorError.value = '';
   if (pendingManualTarget === value) {
     pendingManualTarget = '';

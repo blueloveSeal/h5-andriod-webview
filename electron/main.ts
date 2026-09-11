@@ -11,6 +11,7 @@ let window: BrowserWindow | null = null;
 let inspectorView: WebContentsView | null = null;
 let inspectorTargetId = '';
 let inspectorEndpoint = '';
+let inspectorRelayEndpoint = '';
 let inspectorFrontend: Awaited<ReturnType<typeof startInspectorFrontend>> | null = null;
 let mirrorChannel: MirrorChannel | null = null;
 let mirrorToken = 0;
@@ -42,9 +43,12 @@ function trusted(event: Electron.IpcMainInvokeEvent) {
 function closeInspector() {
   if (!inspectorView) return;
   const view = inspectorView;
+  const relayEndpoint = inspectorRelayEndpoint;
   inspectorView = null;
   inspectorTargetId = '';
   inspectorEndpoint = '';
+  inspectorRelayEndpoint = '';
+  if (relayEndpoint) inspectorFrontend?.release(relayEndpoint);
   window?.contentView.removeChildView(view);
   view.webContents?.close({ waitForBeforeUnload: false });
 }
@@ -239,6 +243,7 @@ ipcMain.handle('inspector:open', async (event, targetId: unknown, boundsValue: u
   inspectorView = view;
   inspectorTargetId = targetId;
   inspectorEndpoint = target.endpoint;
+  inspectorRelayEndpoint = relayEndpoint;
   try {
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
@@ -264,7 +269,8 @@ ipcMain.handle('inspector:open', async (event, targetId: unknown, boundsValue: u
         console.error('[inspector] state=' + JSON.stringify(state));
       }
     }
-    closeInspector();
+    if (inspectorView === view) closeInspector();
+    else if (!contents.isDestroyed()) contents.close({ waitForBeforeUnload: false });
     const detail = error instanceof Error ? error.message : '';
     const code = detail === 'DevTools 加载超时' ? 'TIMEOUT' : detail.match(/ERR_[A-Z_]+/)?.[0];
     return { ok: false, error: code === 'TIMEOUT'

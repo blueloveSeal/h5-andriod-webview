@@ -25,6 +25,26 @@ async function showDevToolsPanel(desktop, command, panel) {
   }, { command, panel });
 }
 
+async function currentDevTools(desktop) {
+  return desktop.evaluate(({ webContents }) => {
+    const matches = webContents.getAllWebContents().filter((entry) => entry.getTitle() === 'DevTools' || /\/[0-9a-f]{40}\/inspector\.html(?:\?|$)/.test(entry.getURL()));
+    return { count: matches.length, id: matches[0]?.id || 0 };
+  });
+}
+
+async function switchWorkbenchPage(page, desktop, index) {
+  const previous = await currentDevTools(desktop);
+  await page.locator('.page-item').nth(index).click();
+  await page.waitForFunction((target) => document.querySelectorAll('.page-item')[target]?.getAttribute('aria-pressed') === 'true', index);
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    const current = await currentDevTools(desktop);
+    if (current.count === 1 && current.id !== previous.id) return current.id;
+    await page.waitForTimeout(250);
+  }
+  return 0;
+}
+
 // 验证实际构建产物；设备数据来自本机 ADB，不使用展示用假数据。
 const artifactRoot = path.resolve('output/playwright');
 const profile = path.join(artifactRoot, 'smoke-profile');
@@ -186,7 +206,21 @@ try {
     assert.equal(recovered.ready, 'complete');
     assert.equal(recovered.hasUi, true);
     assert.equal(recovered.hasElementsPanel, true, JSON.stringify(recovered));
-    console.log('WebView 真机验证通过：手机画面 ' + mirror.width + '×' + mirror.height + ' / ' + mirror.frames + ' 帧，触摸、拖动、键盘与文本控制写入 ' + controlWrites + ' 次，页面数量 ' + result.pages.length + '，屏幕内候选 ' + result.pages.filter((entry) => entry.candidate).length + '，7 个核心 DevTools 面板已加载并在断线后自动恢复（Electron Chromium ' + devtools.chrome + '）。');
+    let stabilitySwitches = 0;
+    if (process.argv.includes('--stability')) {
+      assert.ok(manualIndex >= 0, '稳定性验证需要一个非候选 WebView');
+      for (let cycle = 0; cycle < 10; cycle += 1) {
+        assert.ok(await switchWorkbenchPage(page, desktop, manualIndex), '切换到锁定 WebView 超时');
+        assert.ok(await switchWorkbenchPage(page, desktop, candidateIndex), '切换到候选 WebView 超时');
+        stabilitySwitches += 2;
+      }
+      await page.waitForFunction(() => Boolean(document.querySelector('.inspector-close'))
+        && !document.querySelector('.inspector-error')?.textContent, undefined, { timeout: 30000 });
+      assert.equal((await currentDevTools(desktop)).count, 1, '压力切换后只允许一个 DevTools 视图');
+      await page.locator('.follow-toggle').click();
+      assert.equal(await page.locator('.follow-toggle').getAttribute('aria-pressed'), 'true');
+    }
+    console.log('WebView 真机验证通过：手机画面 ' + mirror.width + '×' + mirror.height + ' / ' + mirror.frames + ' 帧，触摸、拖动、键盘与文本控制写入 ' + controlWrites + ' 次，页面数量 ' + result.pages.length + '，屏幕内候选 ' + result.pages.filter((entry) => entry.candidate).length + '，7 个核心 DevTools 面板已加载并在断线后自动恢复' + (stabilitySwitches ? '，连续切换 ' + stabilitySwitches + ' 次后仍只有一个调试视图' : '') + '（Electron Chromium ' + devtools.chrome + '）。');
   }
   if (process.argv.includes('--screenshot')) await page.screenshot({ path: path.join(artifactRoot, 'desktop.png') });
   console.log('桌面验证通过：窗口、受限 IPC、设备刷新、布局和进程隔离。设备数量：' + state.devices.length);

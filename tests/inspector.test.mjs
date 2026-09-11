@@ -90,6 +90,21 @@ test('本地 WebSocket 中继校验来源并双向传递 CDP 消息', async () =
   }
 });
 
+test('关闭调试视图时释放本地中继登记', async () => {
+  const frontend = await startInspectorFrontend();
+  try {
+    const relay = frontend.relay('ws://127.0.0.1:43210/devtools/page/page-1');
+    assert.ok(relay);
+    assert.equal(frontend.release(relay), true);
+    assert.equal(frontend.release(relay), false);
+    const client = new WebSocket(relay, { origin: new URL(frontend.baseUrl).origin });
+    const status = await new Promise((resolve) => client.once('unexpected-response', (_request, response) => resolve(response.statusCode)));
+    assert.equal(status, 403);
+  } finally {
+    await frontend.close();
+  }
+});
+
 test('调试视图边界取整并限制在主窗口内容区', () => {
   assert.deepEqual(
     inspectorBounds({ x: 566.4, y: 118.6, width: 1000, height: 900 }, { width: 1440, height: 900 }),

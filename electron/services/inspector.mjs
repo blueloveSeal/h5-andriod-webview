@@ -196,6 +196,18 @@ export async function startInspectorFrontend({ fetcher = fetch, onRelayState = (
         return null;
       }
     },
+    release(value) {
+      try {
+        const endpoint = new URL(value);
+        const local = new URL(baseUrl);
+        const match = endpoint.pathname.match(/^\/cdp\/([0-9a-f]{64})$/);
+        if (endpoint.protocol !== 'ws:' || endpoint.host !== local.host || endpoint.username || endpoint.password ||
+            endpoint.search || endpoint.hash || !match) return false;
+        return targets.delete(match[1]);
+      } catch {
+        return false;
+      }
+    },
     close: () => {
       targets.clear();
       for (const client of clients) client.terminate();
